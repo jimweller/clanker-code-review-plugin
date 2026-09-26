@@ -241,7 +241,7 @@ else
 fi
 ```
 
-A stale log with no growing output for several minutes is not proof of a hang; the tool only logs warnings and failed tool calls, so silence during successful work is normal. Absence from `ps` (`kill -0` fails) together with a missing `ocr-scan.json` is proof it is dead. Re-launch only in that case, with the same command from Step 2, against the same `$STATE_DIR/ocr-scan.json` path.
+A stale log with no growing output for several minutes is not proof of a hang; the tool only logs warnings and failed tool calls, so silence during successful work is normal. Measured on a 1217-file repo: the log went quiet for roughly 40 minutes, then wrote nothing further and exited clean about 80 minutes after launch, with `ocr-scan.json` present and `status=success` (719 files reviewed, 2586 findings). Tens of minutes of silence on a repo that size is the expected shape of a healthy run, not a symptom. Absence from `ps` (`kill -0` fails) together with a missing `ocr-scan.json` is proof it is dead. Re-launch only in that case, with the same command from Step 2, against the same `$STATE_DIR/ocr-scan.json` path.
 
 ### Step 3: Collect and Verify
 
