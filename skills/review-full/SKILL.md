@@ -17,7 +17,9 @@ Available on Claude Code (through this plugin) and Codex. Fails preflight by nam
 
 ## Arguments
 
-If the user provided a path with the invocation, treat it as the target directory relative to the repo root. Otherwise pack the whole repo.
+If the user provided a path with the invocation, treat it as the target directory relative to the repo root. Otherwise pack the whole repo. That is the deliberate default, already accepted by whoever invoked this skill, not a decision to re-confirm.
+
+This skill runs `context: fork`, dispatched as a subagent with no user present to answer a prompt. Never pause before dispatch to confirm scope, cost, or model spend. If cost matters, that call was made before invocation, by passing a narrower path.
 
 ## Step 1: Preflight
 

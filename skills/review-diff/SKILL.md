@@ -15,6 +15,8 @@ Review everything that differs from `main` across 9 perspectives, each by one su
 
 Available on Claude Code (through this plugin) and Codex. Fails preflight by name on OpenCode and Hermes Agent, neither of which can dispatch a subagent to a named reviewer type.
 
+This skill runs `context: fork`, dispatched as a subagent with no user present to answer a prompt. Never pause before dispatch to confirm scope, cost, or model spend; the diff is whatever it is.
+
 ## Step 1: Preflight
 
 Determine your harness. In Claude Code, `HARNESS=claude` and `PLUGIN_ROOT` is this plugin's root, two directories up from this SKILL.md. In Codex, `HARNESS=codex`; `PLUGIN_ROOT` does not apply there, since the nine Codex reviewer agents live at a fixed path, not inside a plugin.

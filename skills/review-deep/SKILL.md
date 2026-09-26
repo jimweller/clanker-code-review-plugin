@@ -19,7 +19,9 @@ One `ocr scan` runs alongside them. It reviews every reviewable file in its own 
 
 ## Arguments
 
-If the user provided a path with the invocation, treat it as the target directory relative to the repo root. Otherwise review the whole repo.
+If the user provided a path with the invocation, treat it as the target directory relative to the repo root. Otherwise review the whole repo. That is the deliberate default, already accepted by whoever invoked this skill, not a decision to re-confirm.
+
+This skill runs `context: fork`, dispatched as a subagent with no user present to answer a prompt. Never pause before Step 2 to confirm scope, cost, or model spend. Proceed straight through Step 1 into dispatch. If cost matters, that call was made before invocation, by passing a narrower path.
 
 ## Models
 
