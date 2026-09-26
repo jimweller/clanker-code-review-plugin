@@ -1,0 +1,13 @@
+{
+ "groups": [
+  {
+   "keys": [
+    "c01-010",
+    "c01-012"
+   ],
+   "title": "Repository id used as directory path without validation, allowing directory escape",
+   "location": "src/routes.ts:21",
+   "window_groups": 1
+  }
+ ]
+}

@@ -1,0 +1,24 @@
+{
+ "I0001-M1": {
+  "status": "ready",
+  "reasons": [],
+  "severity": "Critical",
+  "summary": "Substring host check in gitAuthArgs leaks service token to lookalike hosts",
+  "texts": {},
+  "deleted": [],
+  "actions": {
+   "keep": 2
+  }
+ },
+ "I0004-M1": {
+  "status": "ready",
+  "reasons": [],
+  "severity": "Critical",
+  "summary": "Non-admin repo delete filter also matches system-owned repos",
+  "texts": {},
+  "deleted": [],
+  "actions": {
+   "keep": 2
+  }
+ }
+}

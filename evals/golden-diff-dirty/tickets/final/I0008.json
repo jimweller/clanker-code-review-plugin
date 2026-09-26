@@ -1,0 +1,22 @@
+{
+ "id": "I0008",
+ "issue": "I0008",
+ "summary": "No tests for encrypt/decrypt round trip and tamper detection in crypto.ts",
+ "summary_source": "editor",
+ "priority": "Low",
+ "type": "Task",
+ "labels": [
+  "review-diff",
+  "testing"
+ ],
+ "locations": [
+  "src/crypto.ts:10"
+ ],
+ "members": [
+  "F07"
+ ],
+ "description": "{panel:bgColor=#deebff}\nh3. Context\n* {{src/crypto.ts:10}} {{decrypt}} No tests cover {{encrypt}} and {{decrypt}}, including the round trip and tamper detection.\n{panel}\n\nh3. Details\nPaths and line numbers refer to commit {{7a9f10e84d875d9fa1433eb401e8efe6f077f5e4}} on main.\n\n{code:javascript}\n// src/crypto.ts:8-15\n}\n\nexport function decrypt(key: Buffer, sealed: string): string {\n  const [iv, tag, body] = sealed.split(\".\").map((s) => Buffer.from(s, \"base64\"));\n  const d = createDecipheriv(\"aes-256-gcm\", key, iv);\n  d.setAuthTag(tag);\n  return Buffer.concat([d.update(body), d.final()]).toString(\"utf8\");\n}\n{code}\n",
+ "flags": [
+  "deferred"
+ ]
+}

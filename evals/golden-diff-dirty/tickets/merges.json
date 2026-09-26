@@ -1,0 +1,20 @@
+{
+ "I0001-M1": {
+  "units": [
+   "I0001-01",
+   "I0001-02"
+  ],
+  "summary": "Substring host check in gitAuthArgs leaks service token to lookalike hosts",
+  "severity": "Critical",
+  "reason": "In src/git-auth.ts, gitAuthArgs decides whether to add the `Authorization: Bearer` header with `remoteUrl.includes(\"github.com\")`. In src/worktree.ts, cloneRepo just passes repo.remoteUrl and SERVICE_TOKEN to gitAuthArgs and has no host check of its own. So I0001-02 is the same flaw as I0001-01, seen from the caller. Changing gitAuthArgs to parse the URL and compare the exact hostname fixes both tickets. Severity is Critical because anyone who can register a repository can steal the service token."
+ },
+ "I0004-M1": {
+  "units": [
+   "I0004-01",
+   "I0004-02"
+  ],
+  "summary": "Non-admin repo delete filter also matches system-owned repos",
+  "severity": "Critical",
+  "reason": "In src/store.ts:29, Store.deleteRepo runs the non-admin delete as `DELETE FROM repos WHERE id = ? AND (owner = ? OR owner = 'system')`. The route in src/routes.ts:28 passes `req.params.id` and `req.user` straight to this method and does no ownership check of its own. Removing `OR owner = 'system'` from that one query fixes both the store-level bug and the route that exposes it. Severity is Critical because any authenticated user can permanently delete shared system repositories. This is an exploitable authorization flaw that loses data."
+ }
+}

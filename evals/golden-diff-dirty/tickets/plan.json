@@ -1,0 +1,95 @@
+[
+ {
+  "id": "I0001",
+  "type": "Bug",
+  "areas": [
+   "security"
+  ],
+  "title": "gitAuthArgs substring host check leaks service token to attacker hosts via cloneRepo",
+  "severity": "Critical"
+ },
+ {
+  "id": "I0002",
+  "type": "Bug",
+  "areas": [
+   "bug",
+   "correctness"
+  ],
+  "title": "loadDashboard does not handle rejection from fetchCurrentUser, so the dashboard never renders",
+  "severity": "Medium"
+ },
+ {
+  "id": "I0003",
+  "type": "Bug",
+  "areas": [
+   "architecture",
+   "security"
+  ],
+  "title": "Repository id used as directory path without validation, allowing directory escape",
+  "severity": "High"
+ },
+ {
+  "id": "I0004",
+  "type": "Bug",
+  "areas": [
+   "correctness",
+   "security"
+  ],
+  "title": "Store.deleteRepo lets non-admins delete system-owned repositories",
+  "severity": "High"
+ },
+ {
+  "id": "I0006",
+  "type": "Bug",
+  "areas": [
+   "performance"
+  ],
+  "title": "getBuild CI request has no timeout or abort signal",
+  "severity": "Medium"
+ },
+ {
+  "id": "I0007",
+  "type": "Bug",
+  "areas": [
+   "security"
+  ],
+  "title": "ADMIN_CIDR 0.0.0.0/0 makes every client an admin for auditLog",
+  "severity": "High"
+ },
+ {
+  "id": "I0008",
+  "type": "Task",
+  "areas": [
+   "testing"
+  ],
+  "title": "No tests for encrypt/decrypt round trip and tamper detection in crypto.ts",
+  "severity": "Medium"
+ },
+ {
+  "id": "I0009",
+  "type": "Bug",
+  "areas": [
+   "performance"
+  ],
+  "title": "getIssue Jira request has no timeout or abort signal",
+  "severity": "Medium"
+ },
+ {
+  "id": "I0010",
+  "type": "Bug",
+  "areas": [
+   "security"
+  ],
+  "title": "searchAssigned interpolates unescaped email into JQL query",
+  "severity": "Medium"
+ },
+ {
+  "id": "I0012",
+  "type": "Bug",
+  "areas": [
+   "correctness"
+  ],
+  "title": "createFixTask writes feedback separately, so poll and emit see null feedback",
+  "severity": "High"
+ }
+]

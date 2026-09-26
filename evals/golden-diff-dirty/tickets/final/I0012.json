@@ -1,0 +1,20 @@
+{
+ "id": "I0012",
+ "issue": "I0012",
+ "summary": "createFixTask writes feedback separately, so emit sees null feedback",
+ "summary_source": "editor",
+ "priority": "High",
+ "type": "Bug",
+ "labels": [
+  "review-diff",
+  "correctness"
+ ],
+ "locations": [
+  "src/tasks.ts:16"
+ ],
+ "members": [
+  "F17"
+ ],
+ "description": "{panel:bgColor=#deebff}\nh3. Context\n* {{src/tasks.ts:16}} {{createFixTask}} {{createFixTask}} inserts the task as {{running}} with {{feedback: null}} and writes the feedback in a second statement. {{emit}} sends {{\\{ ...task \\}}} with the stale {{null}} feedback.\n{panel}\n\nh3. Details\nPaths and line numbers refer to commit {{7a9f10e84d875d9fa1433eb401e8efe6f077f5e4}} on main.\n\n{code:javascript}\n// src/tasks.ts:14-21\n  const task: Task = { id, state: \"running\", feedback: null };\n  await store.insert(task);\n  await store.update(id, { feedback });\n  emit({ ...task });\n  return task;\n}\n\nexport async function poll(store: TaskStore, run: (t: Task) => Promise<void>): Promise<void> {\n{code}\n",
+ "flags": []
+}
