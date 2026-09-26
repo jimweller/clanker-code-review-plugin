@@ -171,17 +171,27 @@ OUTPUT_PATH: $STATE_DIR/parts/$base.md
 
 Write your findings to OUTPUT_PATH. Writing that file is mandatory and is
 how your work is delivered. Do not return findings as your response."
-OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
-OPENCODE_CONFIG="$HOME/.config/opencode/reviewer.json" \
-opencode run \
-  --agent "reviewer-$area" \
-  -m "$model" $VARIANT \
-  --format json \
-  --dir "$TARGET_PATH" \
-  --title "Review $label $area $comp" \
-  "$prompt" \
-  < /dev/null \
-  > "$STATE_DIR/parts/raw-$base.ndjson" 2> "$STATE_DIR/parts/$base.log"
+attempt=1
+max_attempts=3
+while :; do
+  OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
+  OPENCODE_CONFIG="$HOME/.config/opencode/reviewer.json" \
+  opencode run \
+    --agent "reviewer-$area" \
+    -m "$model" $VARIANT \
+    --format json \
+    --dir "$TARGET_PATH" \
+    --title "Review $label $area $comp" \
+    "$prompt" \
+    < /dev/null \
+    > "$STATE_DIR/parts/raw-$base.ndjson" 2> "$STATE_DIR/parts/$base.log"
+
+  grep -q '"Failed to execute statement"' "$STATE_DIR/parts/raw-$base.ndjson" 2>/dev/null || break
+  [ "$attempt" -ge "$max_attempts" ] && break
+  mv "$STATE_DIR/parts/raw-$base.ndjson" "$STATE_DIR/parts/raw-$base.attempt$attempt.ndjson"
+  sleep $((5 + RANDOM % 15))
+  attempt=$((attempt + 1))
+done
 ARM
 
 : > "$STATE_DIR/tasks.txt"
@@ -220,7 +230,9 @@ Nothing guards against two runs at once. Step 1 wipes `STATE_DIR` and every arm 
 
 Provider limits are not the constraint. OpenAI reports 40,000,000 tokens per minute and Azure Foundry 15,000,000.
 
-opencode's own session store can die under write pressure at `CONCURRENCY=27`. Measured on a 1217-file repo: 26 arms failed in one four-second burst with `error="Failed to execute statement"` against opencode's SQLite-backed store (visible in `~/.local/share/opencode/log/opencode.log`, not in the arm's own stderr, which stays empty). 25 of the 26 wrote no output at all. This is arm mortality from opencode's internal storage under concurrent write load, not a defect in what got reviewed and not something this skill can fix from the outside. It surfaces only as ordinary `MISSING` entries in Step 3; expect a burst of several dozen on a run this size, all re-dispatchable the normal way.
+opencode's own session store can die under write pressure at `CONCURRENCY=27`. Measured on a 1217-file repo: 26 arms failed in one four-second burst with `error="Failed to execute statement"` against opencode's SQLite-backed store (visible in `~/.local/share/opencode/log/opencode.log`, not in the arm's own stderr, which stays empty). 25 of the 26 wrote no output at all. Confirmed upstream (anomalyco/opencode#48416, #47566, #38849, #33320, #21215): opencode's SQLite connection runs `busy_timeout=0`, so a writer that loses the race for the write lock fails immediately instead of waiting, and `Effect.orDie` on the SQL adapter turns that into a fatal message failure instead of a warning. The failing write fires from a `child_process` exit handler right after any concurrent process's tool call returns, so it tracks how many opencode processes are alive and busy, not which ones just launched; two fixes for it are open upstream (#47567, #44558) but neither is merged.
+
+`arm.sh` retries around this: it re-runs the same `opencode run` invocation up to twice more on a `grep` match for `"Failed to execute statement"` in the arm's NDJSON, with 5-19 seconds of jittered sleep between attempts so retries don't restack into the same contention window. A superseded attempt's NDJSON is kept as `raw-$base.attemptN.ndjson`, never deleted, so a full failure history survives even when a later attempt succeeds. This substitutes for the retry opencode's own SQLite layer does not do. An arm that still carries this error after 3 attempts surfaces as an ordinary `MISSING` entry in Step 3, re-dispatchable the normal way.
 
 ### Step 2b: Confirm Arms Start
 
@@ -406,6 +418,7 @@ Report the counts from `report.md`, the confirmed Critical issues, and the cover
 - `coverage/<label>-<area>-<comp>.txt`, each arm's reviewed or skipped record
 - `reviewed.txt` and `opened.txt`, the files arms marked reviewed and the files they opened
 - `parts/<label>-<area>-<comp>.md`, `parts/raw-*.ndjson`, `parts/*.log`, each arm's findings, event stream, and stderr
+- `parts/raw-*.attemptN.ndjson`, a superseded attempt's event stream, kept when arm.sh retries past a SQLite write-contention failure
 - `arm.sh`, `tasks.txt`, `sweeps.txt`, the runner and its work lists
 
 The run directory, `${XDG_CACHE_HOME:-~/.cache}/review-deep/<repo>-<commit12>/`, holds Step 5's output and survives the next review of a different commit:
