@@ -220,6 +220,8 @@ Nothing guards against two runs at once. Step 1 wipes `STATE_DIR` and every arm 
 
 Provider limits are not the constraint. OpenAI reports 40,000,000 tokens per minute and Azure Foundry 15,000,000.
 
+opencode's own session store can die under write pressure at `CONCURRENCY=27`. Measured on a 1217-file repo: 26 arms failed in one four-second burst with `error="Failed to execute statement"` against opencode's SQLite-backed store (visible in `~/.local/share/opencode/log/opencode.log`, not in the arm's own stderr, which stays empty). 25 of the 26 wrote no output at all. This is arm mortality from opencode's internal storage under concurrent write load, not a defect in what got reviewed and not something this skill can fix from the outside. It surfaces only as ordinary `MISSING` entries in Step 3; expect a burst of several dozen on a run this size, all re-dispatchable the normal way.
+
 ### Step 2b: Confirm Arms Start
 
 Run this as a separate foreground call while Step 2 is still waiting. An arm that never created a session wrote nothing and never will, and it holds a pool slot.
