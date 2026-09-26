@@ -198,6 +198,7 @@ SCOPE=""
 ocr scan --audience agent --repo "$PROJECT_ROOT" $SCOPE --max-tokens 1000000 \
   --format json --output "$STATE_DIR/ocr-scan.json" \
   < /dev/null > /dev/null 2> "$STATE_DIR/ocr-scan.log" &
+echo $! > "$STATE_DIR/ocr.pid"
 
 echo "dispatching $(wc -l < "$STATE_DIR/tasks.txt" | tr -d ' ') arms, $CONCURRENCY at a time, plus 1 ocr scan"
 xargs -P "$CONCURRENCY" -L 1 bash "$STATE_DIR/arm.sh" < "$STATE_DIR/tasks.txt"
@@ -205,7 +206,7 @@ wait
 echo "done, $(ls "$STATE_DIR"/parts/*.md 2>/dev/null | wc -l | tr -d ' ') part files written"
 ```
 
-Expect wall time near the number of components times the slowest arm, since the pool runs one wave of 27 per component. A 41-file repo runs one wave. A 414-file repo runs 22.
+`xargs -P` is a rolling pool over the flat task list in `tasks.txt`, not a lockstep batch per component: as soon as any of the 27 slots frees, the next task in the list starts, whatever component it belongs to. Arms from c03 commonly start while c01 arms are still running. Do not report a wave count or a component-by-component ETA; measure actual throughput instead, from `parts/*.md` written per minute of elapsed time, and project the remainder from that rate.
 
 `CONCURRENCY=27` holds 27 `opencode` processes at once, which a 48 GB machine carried without trouble. Each held 370 to 800 MB.
 
@@ -228,6 +229,19 @@ find "$STATE_DIR/parts" -name 'raw-*.ndjson' -size 0 -mmin +1 | sed 's|.*/raw-||
 ```
 
 A healthy arm writes NDJSON within seconds of launch. Kill any arm named here. Step 3 re-dispatches it.
+
+Check the ocr scan the same way, using the PID Step 2 saved. It runs as `node`, not `ocr`, so `pgrep -x ocr` or an `ocr scan` name match never finds it; a process check with no result was misreported once as "the ocr scan has exited" when it was still running.
+
+```bash
+OCR_PID=$(cat "$STATE_DIR/ocr.pid" 2>/dev/null)
+if [ -n "$OCR_PID" ] && kill -0 "$OCR_PID" 2>/dev/null; then
+  echo "ocr scan running, pid $OCR_PID, log last wrote $(stat -f '%Sm' "$STATE_DIR/ocr-scan.log" 2>/dev/null)"
+else
+  echo "ocr scan not running and $STATE_DIR/ocr-scan.json is $([ -s "$STATE_DIR/ocr-scan.json" ] && echo present || echo MISSING)"
+fi
+```
+
+A stale log with no growing output for several minutes is not proof of a hang; the tool only logs warnings and failed tool calls, so silence during successful work is normal. Absence from `ps` (`kill -0` fails) together with a missing `ocr-scan.json` is proof it is dead. Re-launch only in that case, with the same command from Step 2, against the same `$STATE_DIR/ocr-scan.json` path.
 
 ### Step 3: Collect and Verify
 
@@ -288,7 +302,11 @@ comm -23 <(sort "$STATE_DIR/ledger.txt") "$STATE_DIR/reviewed.txt" | sed 's/^/  
 jq -r 'select(.type=="tool_use") | .part.state.input | (.filePath // .relative_path // .path // empty)' \
   "$STATE_DIR"/parts/raw-*.ndjson 2>/dev/null | sed "s|^$PROJECT_ROOT/||" | sort -u > "$STATE_DIR/opened.txt"
 echo "ledger files opened=$(comm -12 <(sort "$STATE_DIR/ledger.txt") "$STATE_DIR/opened.txt" | wc -l | tr -d ' ') of $total"
-jq -r '"ocr status=\(.status) files=\(.summary.files_reviewed) findings=\(.comments|length)"' "$STATE_DIR/ocr-scan.json"
+if [ -s "$STATE_DIR/ocr-scan.json" ]; then
+  jq -r '"ocr status=\(.status) files=\(.summary.files_reviewed) findings=\(.comments|length)"' "$STATE_DIR/ocr-scan.json"
+else
+  echo "ocr-scan.json MISSING, run the Step 2b ocr liveness check before treating this as a dead scan"
+fi
 ```
 
 A `SHORT` line is an arm that marked some of its component `skipped` or wrote no coverage record. Read its reasons in the coverage record. A skip because the file belongs to another area is fine. A skip for lack of depth is a gap.
@@ -380,7 +398,7 @@ Report the counts from `report.md`, the confirmed Critical issues, and the cover
 `.llmtmp/review-deep/` holds the whole run and is wiped at the start of the next one:
 
 - `<label>-<area>.md`, 27 merged findings files, component parts plus sweep
-- `ocr-scan.json` and `ocr-scan.log`, the coverage pass
+- `ocr-scan.json`, `ocr-scan.log`, and `ocr.pid`, the coverage pass
 - `ledger.txt` and `skipped.txt`, the reviewable files and the excluded ones with ocr's reason
 - `components/cNN.txt`, the partition
 - `coverage/<label>-<area>-<comp>.txt`, each arm's reviewed or skipped record
