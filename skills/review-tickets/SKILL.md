@@ -17,7 +17,7 @@ The input is a review-deep, review-full, or review-diff run directory. It holds 
 
 ## Arguments
 
-The run directory printed by review-deep, review-full, or review-diff. Every command below uses it as `RUN`.
+The run directory printed by review-deep, review-full, or review-diff. Every command below uses it as `$RUN`. If the invocation gave no run directory, Step 1 auto-discovers it when exactly one candidate exists; it does not stop to ask.
 
 ## Requirements
 
@@ -38,9 +38,26 @@ S="${CLAUDE_SKILL_DIR}/scripts"   # replace ${CLAUDE_SKILL_DIR} with this SKILL.
 [ -f "$S/plan.py" ] || { echo "scripts not found at $S"; exit 1; }
 PF="${CLAUDE_SKILL_DIR}/../review-deep/scripts"   # preflight.py has one copy, in review-deep
 [ -f "$PF/preflight.py" ] || { echo "scripts not found at $PF"; exit 1; }
-python3 "$PF/preflight.py" --tier tickets --run RUN || exit 1
 
-python3 $S/plan.py RUN
+RUN="<user-provided run directory, or empty>"
+if [ -z "$RUN" ]; then
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}"
+  candidates=$(find "$cache/review-deep" "$cache/review-full" "$cache/review-diff" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+    | while read -r d; do [ -f "$d/run.json" ] && echo "$d"; done)
+  n=$(printf '%s\n' "$candidates" | grep -c .)
+  if [ "$n" -eq 1 ]; then
+    RUN="$candidates"
+    echo "no run directory given, one candidate exists, using $RUN"
+  else
+    echo "no run directory given and $n candidates exist, name one explicitly:"
+    printf '%s\n' "$candidates"
+    exit 1
+  fi
+fi
+
+python3 "$PF/preflight.py" --tier tickets --run "$RUN" || exit 1
+
+python3 $S/plan.py "$RUN"
 ```
 
 `preflight.py --tier tickets` checks that `run.json` exists, that the repository and the reviewed commit both still exist (a commit can be pruned by `git gc` two weeks after a snapshot run, per review-full and review-diff's `init_run.py`), and that `checkout/`, `issues.jsonl`, and `verify/results.jsonl` are all present, since any of the three input kinds must have finished review-deep's Step 5 chain before ticketing starts. The `$S` guard catches a partial or corrupted plugin or skill install.
@@ -50,7 +67,7 @@ An issue is planned when its review rating is at or above the floor, High by def
 ### Step 2: Re-cut into units
 
 ```bash
-python3 $S/recut.py RUN
+python3 $S/recut.py $RUN
 ```
 
 A unit is one issue's findings in one file. A themed issue that merged 77 findings across 24 files produced tickets whose cited locations did not support the claim. Per-file units fixed that, and Step 4 merges units back only when one change fixes them.
@@ -58,10 +75,10 @@ A unit is one issue's findings in one file. A themed issue that merged 77 findin
 ### Step 3: Judge and edit
 
 ```bash
-python3 $S/judge.py RUN              # every unit, background
-python3 $S/apply.py RUN
-python3 $S/judge.py RUN --critical   # second model on units still Critical, background
-python3 $S/apply.py RUN
+python3 $S/judge.py $RUN              # every unit, background
+python3 $S/apply.py $RUN
+python3 $S/judge.py $RUN --critical   # second model on units still Critical, background
+python3 $S/apply.py $RUN
 ```
 
 The judge reads the code, tries to refute every claim, and returns each finding as keep, edit, or delete. A keep must name the code behind each of its claims. An edit changes only what the code contradicts. Every edit and delete cites code, and a script checks each quote against git at the reviewed commit before the answer is accepted. `apply.py` writes `tickets/edits.json`. A unit is excluded when the judge refutes it, when the second model disagrees on the verdict, or when a quote is not the code.
@@ -71,9 +88,9 @@ The judge reads the code, tries to refute every claim, and returns each finding 
 ### Step 4: Merge siblings that share one fix
 
 ```bash
-python3 $S/siblings.py RUN           # background
-python3 $S/judge.py RUN --merged     # background
-python3 $S/apply.py RUN --merged
+python3 $S/siblings.py $RUN           # background
+python3 $S/judge.py $RUN --merged     # background
+python3 $S/apply.py $RUN --merged
 ```
 
 Splitting by file also splits one defect seen from a caller and its callee. For every issue with two or more ready units, a judge groups the units whose defect one change at a single location resolves. The same pattern in two independent places stays two tickets. A merged ticket is then judged again as a whole, which checks its new Summary and can edit its findings. A merged ticket keeps every finding as its own bullet, so a caller and a callee both appear.
@@ -81,8 +98,8 @@ Splitting by file also splits one defect seen from a caller and its callee. For 
 ### Step 5: Assemble and check
 
 ```bash
-python3 $S/assemble.py RUN
-python3 $S/checks.py RUN
+python3 $S/assemble.py $RUN
+python3 $S/checks.py $RUN
 ```
 
 `checks.py` must print `problems 0` before anything is posted. It compares every code block to git byte for byte, checks every location, and flags markup Jira will not render.
@@ -92,7 +109,7 @@ python3 $S/checks.py RUN
 Export the target project's issues with any Jira client as JSON, one object per issue with `key`, `summary`, and `description`, at the top level or under `fields`. Then:
 
 ```bash
-uv run --with scikit-learn --with numpy python $S/dupscreen.py RUN existing.json
+uv run --with scikit-learn --with numpy python $S/dupscreen.py $RUN existing.json
 ```
 
 The screen prints pairs by shared vocabulary for a person to read. Most pairs share a topic, not a defect.
@@ -121,7 +138,7 @@ Post only after the operator's explicit go. Use whichever Jira client is availab
 ### Step 9: Bundle deferred tickets
 
 ```bash
-python3 $S/bundle.py RUN
+python3 $S/bundle.py $RUN
 ```
 
 `tickets/bundle/ticket.json` describes one ticket for all deferred work, with every category label, and `tickets/bundle/<name>-deferred-defects.md` holds each deferred ticket's summary, categories, and findings. Post the ticket, attach the file, and compare the downloaded attachment with the local file byte for byte.
@@ -156,7 +173,7 @@ A ticket carries one category label for every perspective that raised any of its
 
 ## Files
 
-Under `RUN/tickets/`:
+Under `$RUN/tickets/`:
 
 - `plan.json`, `units.jsonl`, the planned issues and their per-file units
 - `judge/results.json`, `judge/merged.json`, every judge answer with its attempts and cost, and `judge/calls/` with each process's event stream
