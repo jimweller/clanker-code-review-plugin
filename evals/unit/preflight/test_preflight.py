@@ -86,25 +86,6 @@ def test_pruned_commit_fails_tickets_tier(tmp_path):
     assert any("reviewed commit is still an object" in line and line.startswith("FAIL") for line in p.stdout.splitlines()), p.stdout
 
 
-def test_canary_absent_passes_as_not_needed(home, stub_bin, tmp_path):
-    p = run_preflight("deep", home, stub_bin, tmp_path)
-    assert any(line == "PASS mcg-sensitive-canary scanner: not needed" for line in p.stdout.splitlines()), p.stdout
-
-
-def test_canary_present_but_not_executable_fails(home, stub_bin, tmp_path):
-    bin_dir = tmp_path / "bin-canary"
-    bin_dir.mkdir()
-    for name in os.listdir(stub_bin):
-        shutil.copy(os.path.join(stub_bin, name), bin_dir / name)
-        os.chmod(bin_dir / name, 0o755)
-    canary = bin_dir / "mcg-sensitive-canary"
-    canary.write_text("#!/bin/sh\nexit 0\n")
-    os.chmod(canary, 0o644)
-    p = run_preflight("deep", home, str(bin_dir), tmp_path)
-    assert p.returncode == 1
-    assert any("mcg-sensitive-canary scanner executable" in line and line.startswith("FAIL") for line in p.stdout.splitlines()), p.stdout
-
-
 def test_full_tier_prints_label_and_agent_prefix_for_claude_harness(home, stub_bin, tmp_path):
     plugin_root = tmp_path / "plugin"
     (plugin_root / "agents").mkdir(parents=True)

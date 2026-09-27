@@ -79,7 +79,7 @@ Stop when all five signals are empty (the commit log, the diffstat, the diff, th
 python3 "$S/init_run.py" --kind diff --base "$BASE" "$PROJECT_ROOT" "$PROJECT_ROOT" "$PROJECT_ROOT/.llmtmp/review-diff"
 ```
 
-Prints `RUN_DIR` and `COMMIT`. `RUN_DIR` is `${XDG_CACHE_HOME:-~/.cache}/review-diff/<repo>-<commit12>`, outside the repository. On a clean working tree `COMMIT` is HEAD. On a dirty one, `init_run.py` snapshots the working tree into an unreferenced commit over HEAD, so the reviewers, the `git diff` below, and Step 8's judges all see the exact same uncommitted edits. `run.json` carries `kind: diff`, `base: $BASE`, and `ticket_label: review-diff`.
+Prints `RUN_DIR` and `COMMIT`. `RUN_DIR` is `${XDG_CACHE_HOME:-~/.cache}/review-diff/<repo>-<commit12>`, outside the repository. On a clean working tree `COMMIT` is HEAD. On a dirty one, `init_run.py` snapshots the working tree into an unreferenced commit over HEAD, so the reviewers, the `git diff` below, and the scripted chain's judges all see the exact same uncommitted edits. `run.json` carries `kind: diff`, `base: $BASE`, and `ticket_label: review-diff`.
 
 ## Step 5: Materialize the Input
 
@@ -106,28 +106,11 @@ done
 wc -c "$INPUT"
 ```
 
-`git diff "$BASE" "$COMMIT"` replaces the old `git diff "$BASE"` against the working tree: reviewers must see exactly what Step 8's judges will later check out and verify, and `$COMMIT` (a snapshot when the tree is dirty, HEAD otherwise) is that same, fixed point. Untracked files carry no diff representation, so their full contents are appended with line numbers.
+`git diff "$BASE" "$COMMIT"` replaces the old `git diff "$BASE"` against the working tree: reviewers must see exactly what the scripted chain's judges will later check out and verify, and `$COMMIT` (a snapshot when the tree is dirty, HEAD otherwise) is that same, fixed point. Untracked files carry no diff representation, so their full contents are appended with line numbers.
 
 `mkdir -p` then `find -delete` rather than `rm -rf`. A `safe-rm` shim on `PATH` (as in some dotfiles setups) moves paths to Trash and exits non-zero on a missing path even under `-f`, which breaks the wipe on a first run.
 
-## Step 6: Pre-flight Scan
-
-A sensitive-data hook that guards `Read` will block a reviewer mid-run, and a reviewer holds no `AskUserQuestion` tool, so it cannot ask for a bypass. Scan the input before the fan-out so the operator learns about it from one cheap step rather than from a partial report.
-
-```bash
-SCAN="$HOME/.config/dotfiles/scripts/canary-scan.sh"
-if [ -x "$SCAN" ]; then
-  "$SCAN" "$INPUT" || true
-fi
-```
-
-`canary-scan.sh` exits 0 with no output when the input is clean or the hook is not installed, and exits 2 printing one `<ruleId> x<count>` line per rule when it hits. The `|| true` keeps a non-zero exit from ending the step; the output is the signal, not the status.
-
-On a hit, tell the operator what fired and continue to Step 7 anyway. State that the reviewers may be blocked on their read, and that re-invoking with `[allow-pii]` on their own prompt clears it. An allow tag on the operator's prompt propagates to the subagents spawned in that turn; the tag does not need to appear in the dispatch prompt.
-
-Blocking is per-read and can be partial. Some reviewers get through while others do not, so Step 9 still has to check every response.
-
-## Step 7: Build the Ledger
+## Step 6: Build the Ledger
 
 ```bash
 python3 "$S/ledger.py" "$STATE_DIR" --diff "$PROJECT_ROOT" "$BASE" "$COMMIT"
@@ -136,11 +119,11 @@ python3 "$S/partition.py" "$STATE_DIR"
 
 `ledger.py --diff` runs `git diff --name-only --no-renames --diff-filter=d` between `$BASE` and `$COMMIT`, so a rename gives its new path once and a deletion is dropped. The reviewers work from `$INPUT` directly, not from `partition.py`'s components; `report.py`'s coverage section is what actually reads them.
 
-## Step 8: Dispatch 9 Reviewers in Parallel
+## Step 7: Dispatch 9 Reviewers in Parallel
 
 Issue all 9 Agent calls **in a single tool block** with `run_in_background: false`.
 
-Subagents default to running in the background. A backgrounded fan-out delivers its results in later turns, so Step 9 would find nothing to consolidate. Synchronous dispatch in one block is what makes the fleet parallel and the report possible in this turn.
+Subagents default to running in the background. A backgrounded fan-out delivers its results in later turns, so Step 8 would find nothing to consolidate. Synchronous dispatch in one block is what makes the fleet parallel and the report possible in this turn.
 
 | Agent type | Area |
 | --- | --- |
@@ -178,17 +161,17 @@ The brief stays short on purpose. Severity, citation format, output shape, and l
 
 Do not pack repomix. The input file holds everything.
 
-## Step 9: Check and Re-dispatch
+## Step 8: Check and Re-dispatch
 
 ```bash
 python3 "$S/check_reviews.py" "$RUN_DIR" "$LABEL"
 ```
 
-Prints one `PASS` or `FAIL` line per area and exits 1 when any fails: the file is missing, has no H2, has no finding and is not exactly `No findings.`, or holds a bullet that parses as neither `normalize.FULL` nor `normalize.BARE`. Two causes are common here: the agent died on a transient API error and wrote nothing, or a hook blocked its read of `$INPUT` and it wrote a refusal instead (Step 6 usually predicts this). Re-dispatch each failing area's agent once, using the same prompt as Step 8, then run `check_reviews.py` again. A second failure is reported as not reviewed in Step 10, not retried further.
+Prints one `PASS` or `FAIL` line per area and exits 1 when any fails: the file is missing, has no H2, has no finding and is not exactly `No findings.`, or holds a bullet that parses as neither `normalize.FULL` nor `normalize.BARE`. Two causes are common here: the agent died on a transient API error and wrote nothing, or a hook blocked its read of `$INPUT` and it wrote a refusal instead. Re-dispatch each failing area's agent once, using the same prompt as Step 7, then run `check_reviews.py` again. A second failure is reported as not reviewed in Step 9, not retried further.
 
 Editing an agent definition does not affect a session already running. Claude Code detects agent files being added or removed, but a session keeps the body it loaded at startup, and a definition reached through a symlink (as dotbot installs them) is not re-read on edit. Restart the session after changing a reviewer.
 
-## Step 10: Run the Scripted Chain and Report
+## Step 9: Run the Scripted Chain and Report
 
 Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
 

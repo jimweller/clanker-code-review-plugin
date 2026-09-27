@@ -276,17 +276,6 @@ def harness_constants(harness):
     return harness, AGENT_PREFIX.get(harness, "")
 
 
-# ---- canary (deep, full, diff) ----
-
-def check_canary():
-    """A missing canary is fine (not every repo has it installed); a present-but-unexecutable one is not."""
-    for d in os.environ.get("PATH", "").split(os.pathsep):
-        p = os.path.join(d, "mcg-sensitive-canary")
-        if os.path.isfile(p):
-            return check("mcg-sensitive-canary scanner executable", os.access(p, os.X_OK), p)
-    return check("mcg-sensitive-canary scanner", True, "not needed")
-
-
 # ---- tickets tier ----
 
 def tickets_tier_checks(run):
@@ -327,9 +316,6 @@ def main():
         results = diff_tier_checks(a.harness, a.plugin_root)
     else:
         results = tickets_tier_checks(a.run)
-
-    if a.tier in ("deep", "full", "diff"):
-        results.append(check_canary())
 
     for r in results:
         print(f"{'PASS' if r['ok'] else 'FAIL'} {r['name']}" + (f": {r['detail']}" if r["detail"] else ""))

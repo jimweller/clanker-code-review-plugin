@@ -1,9 +1,4 @@
-"""Cross-repo invariants: identical shared modules, resolvable script references, plugin hygiene.
-
-Some of these guard tests fail until the Phase 3 SKILL.md rewrite lands (they exist to make that
-rewrite's completion checkable, per the plan's own phase table). Where that is expected, the test
-says so in its assertion message rather than skipping silently.
-"""
+"""Cross-repo invariants: identical shared modules, resolvable script references, plugin hygiene."""
 import filecmp
 import glob
 import os
@@ -15,8 +10,6 @@ AGENTS = sorted(glob.glob(os.path.join(REPO_ROOT, "agents", "*.md")))
 SCRIPT_REF = re.compile(r'\$(?:\{)?([A-Za-z_][A-Za-z0-9_]*)(?:\})?/([A-Za-z0-9_./-]+\.py)')
 ASSIGN = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)="?\$\{CLAUDE_SKILL_DIR\}(/\.\./review-deep)?/scripts"?', re.M)
 NAME_FRONTMATTER = re.compile(r'^name:\s*(\S+)\s*$', re.M)
-
-CANARY_MARKER = "canary-scan.sh"
 
 
 def test_pool_and_evidence_are_byte_identical_across_the_two_skills():
@@ -76,15 +69,10 @@ def test_every_agent_name_equals_its_file_stem():
     assert mismatches == [], f"agent name != file stem: {mismatches}"
 
 
-def test_no_skill_md_names_dotfiles_specific_paths_except_the_canary_line():
+def test_no_skill_md_names_dotfiles_specific_paths():
     violations = []
     for skill_md in SKILL_MD:
         for lineno, line in enumerate(open(skill_md, encoding="utf-8"), 1):
-            if CANARY_MARKER in line:
-                continue
             if "configs/opencode" in line or ".config/dotfiles" in line:
                 violations.append(f"{skill_md}:{lineno}: {line.strip()}")
-    assert violations == [], (
-        "SKILL.md names a dotfiles-specific path outside the canary line; this is expected to fail "
-        "until the Phase 3 SKILL.md rewrite lands:\n" + "\n".join(violations)
-    )
+    assert violations == [], "SKILL.md names a dotfiles-specific path:\n" + "\n".join(violations)

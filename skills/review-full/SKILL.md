@@ -122,22 +122,9 @@ python3 "$S/check_reviews.py" "$RUN_DIR" "$LABEL"
 
 Prints one `PASS` or `FAIL` line per area and exits 1 when any fails: the file is missing, has no H2, has no finding and is not exactly `No findings.`, or holds a bullet that parses as neither `normalize.FULL` nor `normalize.BARE`. Re-dispatch each failing area's agent once, using the same prompt as Step 5, then run `check_reviews.py` again. A second failure is reported as not reviewed in Step 8, not retried further.
 
-## Step 7: Scan, Then Run the Scripted Chain
+## Step 7: Run the Scripted Chain
 
-Scan every area file before reading it. A reviewer that quotes a secret produces a file a sensitive-data hook will block, and there is no way to ask for a bypass mid-read.
-
-```bash
-SCAN="$HOME/.config/dotfiles/scripts/canary-scan.sh"
-if [ -x "$SCAN" ]; then
-  for f in "$STATE_DIR/$LABEL"-*.md; do
-    [ -s "$f" ] && { echo "== $(basename "$f") =="; "$SCAN" "$f" || true; }
-  done
-fi
-```
-
-`canary-scan.sh` exits 0 with no output when a file is clean or the plugin is absent, and exits 2 printing one `<ruleId> x<count>` line per rule when it hits. The `|| true` keeps a non-zero exit from ending the step. On a hit, name what fired and tell the operator that re-invoking with `[allow-pii]` on their own prompt clears the block.
-
-Then run the same chain review-deep's Step 5 does, over this run's `RUN_DIR`. Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
+Run the same chain review-deep's Step 5 does, over this run's `RUN_DIR`. Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
 
 ```bash
 python3 "$S/checkout.py" "$RUN_DIR"

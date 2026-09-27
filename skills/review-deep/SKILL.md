@@ -363,22 +363,9 @@ done
 
 Re-export `STATE_DIR`, `TARGET_PATH`, and `PROJECT_ROOT`, and reset `AREAS`, `MODELS`, and `CONCURRENCY`, when this runs as a separate call from Step 2.
 
-### Step 5: Scan, Collate, Verify, and Report
+### Step 5: Collate, Verify, and Report
 
-Scan each file before reading it. A reviewer that quotes a secret produces a file a sensitive-data hook will block, and there is no way to ask for a bypass mid-read.
-
-```bash
-SCAN="$HOME/.config/dotfiles/scripts/canary-scan.sh"
-if [ -x "$SCAN" ]; then
-  for f in "$STATE_DIR"/*-*.md "$STATE_DIR/ocr-scan.json"; do
-    [ -s "$f" ] && { echo "== $(basename "$f") =="; "$SCAN" "$f" || true; }
-  done
-fi
-```
-
-`canary-scan.sh` exits 0 with no output when the file is clean or the plugin is absent, and exits 2 printing one `<ruleId> x<count>` line per rule when it hits. The `|| true` keeps a non-zero exit from ending the step. On a hit, name what fired and tell the operator that re-invoking with `[allow-pii]` on their own prompt clears the block.
-
-Then run the scripted stages. Run each model stage as a background Bash call. Its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
+Run the scripted stages. Run each model stage as a background Bash call. Its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
 
 ```bash
 S="${CLAUDE_SKILL_DIR}/scripts"   # replace ${CLAUDE_SKILL_DIR} with this SKILL.md's own directory on a non-Claude harness
