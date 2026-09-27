@@ -171,11 +171,13 @@ OUTPUT_PATH: $STATE_DIR/parts/$base.md
 
 Write your findings to OUTPUT_PATH. Writing that file is mandatory and is
 how your work is delivered. Do not return findings as your response."
+mkdir -p "$STATE_DIR/opencode-db"
 attempt=1
 max_attempts=3
 while :; do
   OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
   OPENCODE_CONFIG="$HOME/.config/opencode/reviewer.json" \
+  OPENCODE_DB="$STATE_DIR/opencode-db/$base.db" \
   opencode run \
     --agent "reviewer-$area" \
     -m "$model" $VARIANT \
@@ -230,9 +232,11 @@ Nothing guards against two runs at once. Step 1 wipes `STATE_DIR` and every arm 
 
 Provider limits are not the constraint. OpenAI reports 40,000,000 tokens per minute and Azure Foundry 15,000,000.
 
-opencode's own session store can die under write pressure at `CONCURRENCY=27`. Measured on a 1217-file repo: 26 arms failed in one four-second burst with `error="Failed to execute statement"` against opencode's SQLite-backed store (visible in `~/.local/share/opencode/log/opencode.log`, not in the arm's own stderr, which stays empty). 25 of the 26 wrote no output at all. Confirmed upstream (anomalyco/opencode#48416, #47566, #38849, #33320, #21215): opencode's SQLite connection runs `busy_timeout=0`, so a writer that loses the race for the write lock fails immediately instead of waiting, and `Effect.orDie` on the SQL adapter turns that into a fatal message failure instead of a warning. The failing write fires from a `child_process` exit handler right after any concurrent process's tool call returns, so it tracks how many opencode processes are alive and busy, not which ones just launched; two fixes for it are open upstream (#47567, #44558) but neither is merged.
+opencode's own session store can die under write pressure at `CONCURRENCY=27`. Measured on a 1217-file repo: 26 arms failed in one four-second burst with `error="Failed to execute statement"` against opencode's shared SQLite store (visible in `~/.local/share/opencode/log/opencode.log`, not in the arm's own stderr, which stays empty). 25 of the 26 wrote no output at all. Confirmed upstream (anomalyco/opencode#48416, #47566, #38849, #33320, #21215): opencode's SQLite connection runs `busy_timeout=0`, so a writer that loses the race for the write lock fails immediately instead of waiting, and `Effect.orDie` on the SQL adapter turns that into a fatal message failure instead of a warning. The failing write fires from a `child_process` exit handler right after any concurrent process's tool call returns, so it tracks how many opencode processes are alive and busy at that moment, not which ones just launched.
 
-`arm.sh` retries around this: it re-runs the same `opencode run` invocation up to twice more on a `grep` match for `"Failed to execute statement"` in the arm's NDJSON, with 5-19 seconds of jittered sleep between attempts so retries don't restack into the same contention window. A superseded attempt's NDJSON is kept as `raw-$base.attemptN.ndjson`, never deleted, so a full failure history survives even when a later attempt succeeds. This substitutes for the retry opencode's own SQLite layer does not do. An arm that still carries this error after 3 attempts surfaces as an ordinary `MISSING` entry in Step 3, re-dispatchable the normal way.
+`arm.sh` gives each arm its own database instead of racing on the shared one: `OPENCODE_DB="$STATE_DIR/opencode-db/$base.db"` (confirmed by reading opencode's own source: `OPENCODE_DB` is checked directly and, given an absolute path, used as the SQLite file with no further resolution against the shared data dir). This is the actual fix, not a workaround; a run this size no longer touches `~/.local/share/opencode/opencode.db` at all, and the write-contention failure has nothing left to contend over. `auth.json`, the provider credentials, and the downloaded tool cache under `bin/` are untouched, since only the DB path changes.
+
+The retry loop stays as defense in depth for whatever this doesn't cover: it re-runs the same `opencode run` invocation up to twice more on a `grep` match for `"Failed to execute statement"` in the arm's NDJSON, with 5-19 seconds of jittered sleep between attempts so retries don't restack into the same contention window. A superseded attempt's NDJSON is kept as `raw-$base.attemptN.ndjson`, never deleted. An arm that still carries this error after 3 attempts surfaces as an ordinary `MISSING` entry in Step 3, re-dispatchable the normal way.
 
 ### Step 2b: Confirm Arms Start
 
@@ -419,6 +423,7 @@ Report the counts from `report.md`, the confirmed Critical issues, and the cover
 - `reviewed.txt` and `opened.txt`, the files arms marked reviewed and the files they opened
 - `parts/<label>-<area>-<comp>.md`, `parts/raw-*.ndjson`, `parts/*.log`, each arm's findings, event stream, and stderr
 - `parts/raw-*.attemptN.ndjson`, a superseded attempt's event stream, kept when arm.sh retries past a SQLite write-contention failure
+- `opencode-db/<label>-<area>-<comp>.db`, each arm's isolated opencode session database
 - `arm.sh`, `tasks.txt`, `sweeps.txt`, the runner and its work lists
 
 The run directory, `${XDG_CACHE_HOME:-~/.cache}/review-deep/<repo>-<commit12>/`, holds Step 5's output and survives the next review of a different commit:
