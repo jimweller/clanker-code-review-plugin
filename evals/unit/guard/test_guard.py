@@ -76,3 +76,13 @@ def test_no_skill_md_names_dotfiles_specific_paths():
             if "configs/opencode" in line or ".config/dotfiles" in line:
                 violations.append(f"{skill_md}:{lineno}: {line.strip()}")
     assert violations == [], "SKILL.md names a dotfiles-specific path:\n" + "\n".join(violations)
+
+
+def test_every_reviewer_can_rate_critical_with_the_verifiers_definition():
+    verify = open(os.path.join(REPO_ROOT, "skills", "review-deep", "prompts", "verify.txt"), encoding="utf-8").read()
+    definition = "an exploitable security flaw, or data loss or corruption in normal use"
+    assert definition in verify
+    for path in AGENTS:
+        text = open(path, encoding="utf-8").read()
+        assert "Severity is `Critical`, `High`, `Medium`, or `Low`" in text, path
+        assert definition in text, path

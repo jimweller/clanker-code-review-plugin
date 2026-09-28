@@ -1,6 +1,6 @@
 {
   "name": "clanker-code-review",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Nine-perspective code review skills (deep, full, diff, tickets) with a scripted collate/rank/verify back half and Claude reviewer agents.",
   "author": {
     "name": "Jim Weller"

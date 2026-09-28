@@ -22,7 +22,7 @@ PLUGIN_ROOT = os.path.dirname(os.path.dirname(SKILL_ROOT))
 AREAS = ["architecture", "correctness", "data", "ops", "performance", "quality", "security", "solid", "testing"]
 CORE_SCRIPTS = ["common.py", "init_run.py", "checkout.py", "normalize.py", "collate.py", "windows.py", "merge.py",
                 "rank.py", "verify.py", "report.py", "ledger.py", "partition.py", "check_reviews.py", "evidence.py", "pool.py",
-                "opencode_env.py"]
+                "opencode_env.py", "export.py"]
 ENV_REF = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 

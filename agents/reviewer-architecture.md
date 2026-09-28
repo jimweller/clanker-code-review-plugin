@@ -112,7 +112,7 @@ One finding per line, in exactly this shape:
 
 - **High** `src/pkg/file.go:42` `FuncName` Defect stated in one sentence. The concrete failure it causes.
 
-Severity is `High`, `Medium`, or `Low`, bold, first. Then the backticked citation,
+Severity is `Critical`, `High`, `Medium`, or `Low`, bold, first. Critical means an exploitable security flaw, or data loss or corruption in normal use. Then the backticked citation,
 then the backticked symbol, then one sentence naming the defect, then one sentence
 naming the failure. No sub-bullets, no paragraphs, no preamble, no closing summary.
 

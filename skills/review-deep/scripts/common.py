@@ -21,8 +21,9 @@ DEFAULT_MODELS = {
     "critical": ["fable", "high"],
     "sibling": ["opus", "xhigh"],
 }
-JUDGE_EXCLUDE = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".claude", ".cursor", ".cursorrules", ".windsurfrules",
-                 ".github/copilot-instructions.md", ".mcp.json", ".serena", ".llmtmp"]
+JUDGE_EXCLUDE = ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "GEMINI.md", ".claude", ".agents", ".opencode", "opencode.json",
+                 "opencode.jsonc", ".mcp.json", ".serena", ".gemini", ".codex", ".cursor", ".cursorrules", ".windsurfrules",
+                 ".clinerules", ".github/copilot-instructions.md", ".llmtmp", ".llmdocs"]
 
 
 def run_dir(argv=None):

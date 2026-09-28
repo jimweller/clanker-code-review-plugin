@@ -35,8 +35,8 @@ def excluded_paths(root, patterns):
     return sorted(hits)
 
 
-def make(run):
-    dest = run["checkout"]
+def make(run, dest=None):
+    dest = dest or run["checkout"]
     if os.path.exists(dest):
         shutil.rmtree(dest)
     os.makedirs(dest)

@@ -11,9 +11,9 @@ STARTER_CHARACTER = 🕵️‍♂️
 
 # Code Review Command
 
-Review a codebase from 9 perspectives against 3 models. The repo is cut into components of at most 25 files, and each of the 27 perspective and model pairs reviews every component, so every file gets all 27 reviews. Each arm is its own `opencode run` process that navigates the whole live tree with Serena and writes its own findings. A sweep per pair then looks for defects the component boundaries hid.
+Review a codebase from 9 perspectives against 3 models. The repo is cut into components of at most 25 files, and each of the 27 perspective and model pairs reviews every component, so every file gets all 27 reviews. Each arm is its own `opencode run` process that works in its own copy of the reviewed commit, navigates it with Serena, and writes its own findings. A sweep per pair then looks for defects the component boundaries hid.
 
-Nothing is packed. There is no orchestrator process and no `task` fan-out. A reviewer reads the code as it sits on disk, so a citation points at a real line in a real file.
+Nothing is packed. There is no orchestrator process and no `task` fan-out. A reviewer reads the files of the reviewed commit, so a citation points at a real line in a real file. No reviewer reads the live repository.
 
 One `ocr scan` runs alongside them. It reviews every reviewable file in its own conversation with a generic checklist, which makes it an independent fourth source.
 
@@ -89,29 +89,36 @@ mkdir -p "$STATE_DIR"
 find "$STATE_DIR" -mindepth 1 -delete
 mkdir -p "$STATE_DIR/components" "$STATE_DIR/coverage" "$STATE_DIR/parts"
 
+INIT=$(python3 "$S/init_run.py" "$PROJECT_ROOT" "$TARGET_PATH" "$STATE_DIR") || exit 1
+echo "$INIT"
+RUN_DIR=$(printf '%s\n' "$INIT" | sed -n 's/^RUN_DIR=//p')
+EXPORT=$(python3 "$S/export.py" "$RUN_DIR" | sed -n 's/^EXPORT=//p')
+[ -d "$EXPORT" ] || { echo "export.py made no export"; exit 1; }
+
 SCOPE=""
 [ "$TARGET_PATH" != "$PROJECT_ROOT" ] && SCOPE="--path ${TARGET_PATH#"$PROJECT_ROOT"/}"
-ocr scan --preview --format json --repo "$PROJECT_ROOT" $SCOPE 2>/dev/null > "$STATE_DIR/ocr-preview.json"
+ocr scan --preview --format json --repo "$EXPORT" $SCOPE 2>/dev/null > "$STATE_DIR/ocr-preview.json"
 jq -r '.files[] | select(.will_review) | .path' "$STATE_DIR/ocr-preview.json" > "$STATE_DIR/ledger.txt"
 jq -r '.files[] | select(.will_review | not) | "\(.path)\t\(.exclude_reason)"' "$STATE_DIR/ocr-preview.json" > "$STATE_DIR/skipped.txt"
 
 python3 "$S/partition.py" "$STATE_DIR"
-python3 "$S/opencode_env.py" "$PROJECT_ROOT" "$STATE_DIR" || exit 1
+python3 "$S/opencode_env.py" "$STATE_DIR" || exit 1
 
 echo "PROJECT_ROOT=$PROJECT_ROOT"
 echo "TARGET_PATH=$TARGET_PATH"
 echo "TARGET_NAME=$TARGET_NAME"
 echo "STATE_DIR=$STATE_DIR"
+echo "EXPORT=$EXPORT"
 echo "LEDGER=$(wc -l < "$STATE_DIR/ledger.txt" | tr -d ' ') reviewable, $(wc -l < "$STATE_DIR/skipped.txt" | tr -d ' ') skipped"
-
-python3 "$S/init_run.py" "$PROJECT_ROOT" "$TARGET_PATH" "$STATE_DIR"
 ```
 
 `preflight.py --tier deep` checks every tool, config file, model whitelist entry, and provider key this skill needs before anything is wiped, and fails loudly by name rather than partway through a run. The `$S` guard catches a partial or corrupted plugin install the same way.
 
-`init_run.py` records the reviewed commit, HEAD at this moment, and creates the run directory at `${XDG_CACHE_HOME:-~/.cache}/review-deep/<repo>-<commit12>`, outside the repository. It prints `RUN_DIR`, and Step 5 uses it. It warns when the working tree has uncommitted changes, because reviewers read the live tree while the Step 5 judges read the commit. Commit or stash first when the warning lists source files. `run.json` in the run directory holds the models, the concurrency, the files a judge must not see, and the commit sentence tickets carry. Edit it before Step 5 to change any of them.
+`init_run.py` records the reviewed commit, HEAD at this moment, and creates the run directory at `${XDG_CACHE_HOME:-~/.cache}/review-deep/<repo>-<commit12>`, outside the repository. It prints `RUN_DIR`, and Step 5 uses it. It warns when the working tree has uncommitted changes, because every reviewer and judge reads the commit, so uncommitted changes go unreviewed. Commit first when the warning lists source files. `run.json` in the run directory holds the models, the concurrency, the files a judge must not see, and the commit sentence tickets carry. Edit it before Step 5 to change any of them.
 
-`ocr scan --preview` lists every file without calling a model. `ledger.txt` holds the reviewable ones. `skipped.txt` holds the rest with ocr's reason, such as `binary` or `unsupported_ext`, and Step 5 reports it as the skipped ledger.
+`export.py` exports the reviewed commit with `git archive` into a new temporary directory, deletes every name in `run.json` `judge_exclude` at any depth, such as `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.opencode/`, and `.llmdocs/`, and commits the result as a one-commit repository of its own, so opencode, Serena, and ocr find their project root there. Every arm reviews its own `cp -R` copy of it, and the ocr scan reviews another. The live repository is never read by a model and never modified. Measured on a 1179-file repository, the export took 0.6 s and 12 MB, so 27 concurrent copies hold about 324 MB.
+
+`ocr scan --preview` runs on the export and lists every file without calling a model, so the ledger matches exactly what the arms can see. `ledger.txt` holds the reviewable ones. `skipped.txt` holds the rest with ocr's reason, such as `binary` or `unsupported_ext`, and Step 5 reports it as the skipped ledger.
 
 `partition.py` cuts the ledger into components of at most 25 files along directory lines, the size Anthropic's Claude Security scanner uses. A reviewer given the whole repo stops after 40 to 50 files by its own choice. Given a component, it reviews every file. A 41-file repo yields 1 component and a 414-file repo yields 22.
 
@@ -124,7 +131,7 @@ python3 "$S/init_run.py" "$PROJECT_ROOT" "$TARGET_PATH" "$STATE_DIR"
 Each of the 27 area and model pairs reviews every component, so a run has 27 arms per component. A worker pool runs them `CONCURRENCY` at a time, beside one ocr scan. Substitute the values Step 1 printed.
 
 ```bash
-export PROJECT_ROOT TARGET_PATH STATE_DIR
+export PROJECT_ROOT TARGET_PATH STATE_DIR EXPORT
 AREAS="security architecture solid correctness testing ops performance quality data"
 MODELS="openai:openai/gpt-6-sol gemini:google/gemini-3.8-flash claude:az-anthropic/claude-opus-5-5"
 CONCURRENCY=27
@@ -132,55 +139,68 @@ CONCURRENCY=27
 cat > "$STATE_DIR/arm.sh" <<'ARM'
 #!/bin/bash
 label=$1 model=$2 area=$3 comp=$4
-if [ ! -d "$STATE_DIR/parts" ] || [ ! -d "$TARGET_PATH" ]; then
-  echo "arm.sh: STATE_DIR='$STATE_DIR' TARGET_PATH='$TARGET_PATH'. Export both with the values Step 1 printed." >&2
+if [ ! -d "$STATE_DIR/parts" ] || [ ! -d "$TARGET_PATH" ] || [ ! -d "$PROJECT_ROOT" ] || [ ! -d "$EXPORT" ]; then
+  echo "arm.sh: STATE_DIR='$STATE_DIR' TARGET_PATH='$TARGET_PATH' PROJECT_ROOT='$PROJECT_ROOT' EXPORT='$EXPORT'. Export all four with the values Step 1 printed." >&2
   exit 255
 fi
 VARIANT=""
 [ "$label" = claude ] && VARIANT="--variant xhigh"
 base="$label-$area-$comp"
+arm_dir=$(mktemp -d "${TMPDIR:-/tmp}/review-deep-arm.XXXXXX")
+trap 'rm -rf "$arm_dir"' EXIT
+copy="$(cd -P "$arm_dir" && pwd -P)/repo"
+cp -R "$EXPORT" "$copy"
+work="$copy/.review-arm"
+mkdir -p "$work" "$STATE_DIR/arms"
+echo "$copy" > "$STATE_DIR/arms/$base.root"
+target="$copy${TARGET_PATH#"$PROJECT_ROOT"}"
 if [ "$comp" = sweep ]; then
-  scope="LEDGER_PATH: $STATE_DIR/ledger.txt
-FINDINGS_PATH: $STATE_DIR/$label-$area.md
+  cp "$STATE_DIR/ledger.txt" "$work/ledger.txt"
+  cp "$STATE_DIR/$label-$area.md" "$work/listed-findings.md"
+  scope="LEDGER_PATH: $work/ledger.txt
+FINDINGS_PATH: $work/listed-findings.md
 
 LEDGER_PATH lists every reviewable source file. A component-by-component
 review already covered them, and its findings are in FINDINGS_PATH. Look only
 for defects that are not already listed there, especially defects that span
 components. Do not repeat a listed finding."
 else
-  scope="LEDGER_PATH: $STATE_DIR/components/$comp.txt
-COVERAGE_PATH: $STATE_DIR/coverage/$base.txt
+  cp "$STATE_DIR/components/$comp.txt" "$work/ledger.txt"
+  scope="LEDGER_PATH: $work/ledger.txt
+COVERAGE_PATH: $work/coverage.txt
 
-LEDGER_PATH lists the source files assigned to you, one path per line. Read it
-first and review every file it lists. The rest of the repository is context:
-follow calls into it, and report defects in the listed files.
+LEDGER_PATH lists the source files assigned to you, one path per line,
+relative to $copy. Read it first and review every file it lists. The rest of
+the repository is context: follow calls into it, and report defects in the
+listed files.
 
 For every path in LEDGER_PATH, write one line to COVERAGE_PATH: the path, then
 reviewed or skipped, then a short reason. Every listed path must appear
 exactly once before you finish."
 fi
-prompt="Review the source files under $TARGET_PATH that your ledger assigns.
+prompt="Review the source files under $target that your ledger assigns.
 
 Navigate with serena symbolic tools: get_symbols_overview to map a file,
 find_symbol to read a definition, find_referencing_symbols to find callers,
 find_declaration and find_implementations to resolve a usage. Read a whole
-file only when symbolic navigation cannot answer the question.
+file only when symbolic navigation cannot answer the question. Everything
+you need is under $copy.
 
-Cite path:line from the live file and name the enclosing function, method,
-or type. A line you saw counts as verified, and find_symbol returns a symbol's
-line range. When you cannot verify the exact line, cite the nearest line you
-saw and end the finding with \`line unconfirmed\`. Never drop a real defect
-because its line number is uncertain.
+Cite path:line with the path relative to $copy, and name the enclosing
+function, method, or type. A line you saw counts as verified, and find_symbol
+returns a symbol's line range. When you cannot verify the exact line, cite the
+nearest line you saw and end the finding with \`line unconfirmed\`. Never drop
+a real defect because its line number is uncertain.
 
 $scope
 
-OUTPUT_PATH: $STATE_DIR/parts/$base.md
+OUTPUT_PATH: $work/findings.md
 
 Write your findings to OUTPUT_PATH. Writing that file is mandatory and is
 how your work is delivered. Do not return findings as your response."
 raw="$STATE_DIR/parts/raw-$base.ndjson"
 wrote_findings() {
-  [ -s "$STATE_DIR/parts/$base.md" ] ||
+  [ -s "$work/findings.md" ] ||
     jq -r 'select(.type=="text") | .part.text' "$raw" 2>/dev/null | grep -q '^## '
 }
 mkdir -p "$STATE_DIR/opencode-db" "$STATE_DIR/parts/attempts"
@@ -198,7 +218,7 @@ while :; do
     --agent "reviewer-$area" \
     -m "$model" $VARIANT \
     --format json \
-    --dir "$TARGET_PATH" \
+    --dir "$target" \
     --title "Review $label $area $comp" \
     "$prompt" \
     < /dev/null \
@@ -210,6 +230,8 @@ while :; do
   sleep $((5 + RANDOM % 15))
   attempt=$((attempt + 1))
 done
+[ -s "$work/findings.md" ] && sed "s|$copy/||g" "$work/findings.md" > "$STATE_DIR/parts/$base.md"
+[ -s "$work/coverage.txt" ] && sed "s|$copy/||g" "$work/coverage.txt" > "$STATE_DIR/coverage/$base.txt"
 wrote_findings || { echo "arm.sh: $base wrote no findings in $attempt attempts" >&2; exit 1; }
 ARM
 
@@ -224,7 +246,9 @@ done
 
 SCOPE=""
 [ "$TARGET_PATH" != "$PROJECT_ROOT" ] && SCOPE="--path ${TARGET_PATH#"$PROJECT_ROOT"/}"
-ocr scan --audience agent --repo "$PROJECT_ROOT" $SCOPE --max-tokens 1000000 \
+OCR_COPY="$(mktemp -d "${TMPDIR:-/tmp}/review-deep-ocr.XXXXXX")/repo"
+cp -R "$EXPORT" "$OCR_COPY"
+ocr scan --audience agent --repo "$OCR_COPY" $SCOPE --max-tokens 1000000 \
   --format json --output "$STATE_DIR/ocr-scan.json" \
   < /dev/null > /dev/null 2> "$STATE_DIR/ocr-scan.log" &
 echo $! > "$STATE_DIR/ocr.pid"
@@ -232,6 +256,7 @@ echo $! > "$STATE_DIR/ocr.pid"
 echo "dispatching $(wc -l < "$STATE_DIR/tasks.txt" | tr -d ' ') arms, $CONCURRENCY at a time, plus 1 ocr scan"
 xargs -P "$CONCURRENCY" -L 1 bash "$STATE_DIR/arm.sh" < "$STATE_DIR/tasks.txt"
 wait
+rm -rf "$(dirname "$OCR_COPY")"
 echo "done, $(ls "$STATE_DIR"/parts/*.md 2>/dev/null | wc -l | tr -d ' ') part files written"
 ```
 
@@ -241,7 +266,9 @@ echo "done, $(ls "$STATE_DIR"/parts/*.md 2>/dev/null | wc -l | tr -d ' ') part f
 
 Reviewers run as an appliance. `XDG_CONFIG_HOME` points opencode at the config Step 1 generated, so none of the operator's opencode agents, skills, rules, plugins, or MCP servers load. Credentials still resolve, because opencode keeps `auth.json` under `XDG_DATA_HOME` and providers read keys from environment variables. `OPENCODE_PURE=1` skips external plugins, `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` skips the skill scans under `~/.claude` and `~/.agents`, `OPENCODE_DISABLE_CLAUDE_CODE=1` skips `~/.claude/CLAUDE.md` and `.claude/skills`, and `OPENCODE_DISABLE_PROJECT_CONFIG=1` skips the reviewed repo's `opencode.json`, `.opencode/`, and `AGENTS.md`. Each was measured against opencode 1.18.20 with `opencode debug config`, `opencode debug skill`, and a planted instruction the model was asked to find.
 
-A reviewer writes its own file with `write`, or `apply_patch` on an OpenAI model. The generated agents deny every tool and then allow `read`, `grep`, `glob`, the write tools, and Serena minus its four write families. An `edit` rule limits writes to `$STATE_DIR/parts` and `$STATE_DIR/coverage`. They run as `mode: primary`, because opencode ignores a subagent's `tools` block when the agent is selected with `--agent`.
+Each arm runs in a copy of the export under `$TMPDIR/review-deep-arm.*`, with `--dir` inside it. `arm.sh` puts the arm's ledger, and for a sweep that area's merged findings, in the copy's `.review-arm/`. The arm writes its findings and coverage record there with `write`, or `apply_patch` on an OpenAI model. `arm.sh` copies them to `parts/` and `coverage/`, strips the copy's path from citations, and deletes the copy on exit. The generated agents deny every tool and then allow `read`, `grep`, `glob`, the write tools, and Serena minus its four write families. One shared `external_directory` rule denies every path outside the arm's own copy, and an `edit` rule allows writes only under `.review-arm/`. Measured on opencode 1.18.20: `grep` given an absolute path outside the copy, `glob`, and `read` were refused, and `grep` inside the copy worked.
+
+Serena runs as its own process, so opencode's rules do not reach it. Measured on Serena 1.7.0: it refused a relative path that leaves the copy and an absolute directory path, but `find_symbol`, `get_symbols_overview`, and `get_diagnostics_for_file` answered for an absolute file path outside the copy. An arm that knows or guesses a file path elsewhere on the machine can still read that file's symbols through Serena. It resolved a `go.work` module inside the copy, across the module boundary. They run as `mode: primary`, because opencode ignores a subagent's `tools` block when the agent is selected with `--agent`.
 
 A reviewer must not call `task`. Two of 27 reviewers on a 1070-file repo spawned a subagent that never returned, and `TaskTool` runs a foreground subagent with a blocking `yield`, so the parent hung and Step 2's `wait` hung with it. The agents set `tools.task: false` and `permission.task: {"*": deny}`. After the fix both reviewers completed with zero `task` calls.
 
@@ -255,7 +282,7 @@ opencode's own session store can die under write pressure at `CONCURRENCY=27`. M
 
 The retry loop re-runs the same `opencode run` invocation up to twice more in two cases. The first is a `grep` match for `"Failed to execute statement"` in the arm's NDJSON, kept as defense in depth for whatever the per-arm database leaves uncovered. The second is an arm that ends with no findings, meaning `OUTPUT_PATH` is empty and no text event carries a `## ` heading. Measured on a 718-file repo, 20 of 351 gemini arms read files, made no write call, and ended on a `stop` step with 0 output tokens. None of the 331 gemini arms that wrote findings ended that way. Attempts are separated by 5 to 19 seconds of jittered sleep so retries don't restack into the same contention window. A superseded attempt's NDJSON moves to `parts/attempts/raw-$base.attemptN.ndjson` and is never deleted. That directory sits outside the `parts/raw-*.ndjson` glob Step 3 extracts from. An arm with no findings after 3 attempts exits 1 with its name on stderr and surfaces as an ordinary `MISSING` entry in Step 3.
 
-`arm.sh` exits 255 when `STATE_DIR` or `TARGET_PATH` is unset or names a missing directory. `xargs` stops launching arms after an exit of 255, so a batch dispatched from a shell that never exported them fails on its first arms instead of reporting success. Shell variables do not carry between Bash calls, so every call that runs `arm.sh` exports both. One retry batch ran all 20 of its arms with an empty `STATE_DIR`. Each arm failed on `mkdir: /opencode-db: Read-only file system`, and the batch still exited 0.
+`arm.sh` exits 255 when `STATE_DIR`, `TARGET_PATH`, `PROJECT_ROOT`, or `EXPORT` is unset or names a missing directory. `xargs` stops launching arms after an exit of 255, so a batch dispatched from a shell that never exported them fails on its first arms instead of reporting success. Shell variables do not carry between Bash calls, so every call that runs `arm.sh` exports all four. One retry batch ran all 20 of its arms with an empty `STATE_DIR`. Each arm failed on `mkdir: /opencode-db: Read-only file system`, and the batch still exited 0.
 
 ### Step 2b: Confirm Arms Start
 
@@ -290,7 +317,7 @@ The merge rebuilds each merged file from scratch out of the component parts and,
 for f in "$STATE_DIR"/parts/raw-*.ndjson; do
   b=$(basename "$f" .ndjson); out="$STATE_DIR/parts/${b#raw-}.md"
   [ -s "$out" ] && continue
-  jq -r 'select(.type=="text") | .part.text' "$f" | awk '/^## /{p=1} p' > "$out"
+  jq -r 'select(.type=="text") | .part.text' "$f" | awk '/^## /{p=1} p' | sed -E 's#[^ `]*/review-deep-arm\.[^/ ]+/repo/##g' > "$out"
   [ -s "$out" ] || rm -f "$out"
 done
 
@@ -318,7 +345,7 @@ for label in openai gemini claude; do
       echo "  $area MISSING"
     else
       n=$(grep -c '^- \*\*' "$f")
-      cited=$(grep -oE '^- \*\*(High|Medium|Low)\*\* `[^`]+`' "$f" | grep -c ':[0-9]')
+      cited=$(grep -oE '^- \*\*(Critical|High|Medium|Low)\*\* `[^`]+`' "$f" | grep -c ':[0-9]')
       unconf=$(grep -c 'line unconfirmed' "$f")
       echo "  $area ok findings=$n cited=$cited unconfirmed=$unconf"
     fi
@@ -340,7 +367,7 @@ cat "$STATE_DIR"/coverage/*.txt 2>/dev/null | awk '$2 ~ /^reviewed/ {print $1}' 
 echo "ledger files reviewed by at least one arm=$(comm -12 <(sort "$STATE_DIR/ledger.txt") "$STATE_DIR/reviewed.txt" | wc -l | tr -d ' ') of $total"
 comm -23 <(sort "$STATE_DIR/ledger.txt") "$STATE_DIR/reviewed.txt" | sed 's/^/  never reviewed: /'
 jq -r 'select(.type=="tool_use") | .part.state.input | (.filePath // .relative_path // .path // empty)' \
-  "$STATE_DIR"/parts/raw-*.ndjson 2>/dev/null | sed "s|^$PROJECT_ROOT/||" | sort -u > "$STATE_DIR/opened.txt"
+  "$STATE_DIR"/parts/raw-*.ndjson 2>/dev/null | sed -E 's#^.*/review-deep-arm\.[^/]+/repo/##' | sort -u > "$STATE_DIR/opened.txt"
 echo "ledger files opened=$(comm -12 <(sort "$STATE_DIR/ledger.txt") "$STATE_DIR/opened.txt" | wc -l | tr -d ' ') of $total"
 if [ -s "$STATE_DIR/ocr-scan.json" ]; then
   jq -r '"ocr status=\(.status) files=\(.summary.files_reviewed) findings=\(.comments|length)"' "$STATE_DIR/ocr-scan.json"
@@ -354,7 +381,7 @@ A `SHORT` line is an arm that marked some of its component `skipped` or wrote no
 Re-dispatch a `MISSING` arm from a shell that exports the values Step 1 printed, then rerun the extract-and-merge block above. `arm.sh` already retried the arm twice, so re-dispatch it once.
 
 ```bash
-export PROJECT_ROOT=<PROJECT_ROOT> TARGET_PATH=<TARGET_PATH> STATE_DIR=<STATE_DIR>
+export PROJECT_ROOT=<PROJECT_ROOT> TARGET_PATH=<TARGET_PATH> STATE_DIR=<STATE_DIR> EXPORT=<EXPORT>
 bash "$STATE_DIR/arm.sh" <label> <model> <area> <comp>
 ```
 
@@ -387,7 +414,13 @@ done < "$STATE_DIR/sweeps.txt"
 
 Re-dispatch a `MISSING` sweep the same way as a `MISSING` arm in Step 3.
 
-Re-export `STATE_DIR`, `TARGET_PATH`, and `PROJECT_ROOT`, and reset `AREAS`, `MODELS`, and `CONCURRENCY`, when a block runs as a separate call from Step 2.
+Re-export `STATE_DIR`, `TARGET_PATH`, `PROJECT_ROOT`, and `EXPORT`, and reset `AREAS`, `MODELS`, and `CONCURRENCY`, when a block runs as a separate call from Step 2.
+
+After the last sweep and the last re-dispatch, delete the export. Step 5 makes its own checkout for the judges.
+
+```bash
+rm -rf "$EXPORT"
+```
 
 ### Step 5: Collate, Verify, and Report
 
@@ -438,6 +471,7 @@ Report the counts from `report.md`, the confirmed Critical issues, and the cover
 - `parts/attempts/raw-*.attemptN.ndjson`, a superseded attempt's event stream, kept when arm.sh retries past a SQLite write-contention failure or an arm that wrote no findings
 - `opencode-db/<label>-<area>-<comp>.db`, each arm's isolated opencode session database
 - `opencode-config/`, the generated opencode config every arm runs under, and its per-area prompt files
+- `arms/<label>-<area>-<comp>.root`, the path of the copy each arm ran in, the one root its tool calls may touch
 - `arm.sh`, `tasks.txt`, `sweeps.txt`, the runner and its work lists
 
 The run directory, `${XDG_CACHE_HOME:-~/.cache}/review-deep/<repo>-<commit12>/`, holds Step 5's output and survives the next review of a different commit:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the minimal opencode config every review-deep arm runs under. No model calls.
 
-    python3 opencode_env.py PROJECT_ROOT STATE_DIR [--user-config PATH] [--serena-home DIR]
+    python3 opencode_env.py STATE_DIR [--user-config PATH] [--serena-home DIR]
 
 Writes STATE_DIR/opencode-config/opencode/opencode.json and one prompt file per area, and prints
 OPENCODE_XDG. arm.sh exports that as XDG_CONFIG_HOME, so opencode reads this file as its whole
@@ -13,10 +13,11 @@ server, run with this plugin's reviewer context and manual, and nine primary age
 are the bodies of this plugin's agents/reviewer-<area>.md, the same text the Claude reviewers use.
 
 An agent's tools map starts with "*": false and allows reading, searching, Serena's read tools,
-and writing. opencode evaluates the last matching rule, so the deny-all goes first. Writes are
-limited to STATE_DIR/parts and STATE_DIR/coverage. opencode matches edit rules against the path
-relative to the project's git root and external_directory rules against the absolute real path,
-and on macOS a /var path that is not resolved to /private/var matches neither.
+and writing. opencode evaluates the last matching rule, so the deny-all goes first. Each arm runs
+in its own copy of the export, so one shared rule isolates all of them: external_directory denies
+every path outside the copy, and edit allows only .review-arm/, where arm.sh puts the arm's ledger
+and collects its findings. opencode matches edit rules against the path relative to the project's
+git root. Serena is a separate process these rules do not reach.
 """
 import argparse
 import json
@@ -40,18 +41,7 @@ def body(path):
     return text
 
 
-def write_rules(project, state):
-    project, state = os.path.realpath(project), os.path.realpath(state)
-    edit, external = {"*": "deny"}, {"*": "deny"}
-    for sub in ("parts", "coverage"):
-        edit[f"{os.path.relpath(os.path.join(state, sub), project)}/*"] = "allow"
-        if os.path.relpath(state, project).startswith(".."):
-            external[f"{state}/{sub}/*"] = "allow"
-    return edit, external
-
-
-def build(project, state, user, serena_home, prompts_dir):
-    edit, external = write_rules(project, state)
+def build(user, serena_home, prompts_dir):
     agents = {}
     for area in AREAS:
         prompt = os.path.join(prompts_dir, f"reviewer-{area}.md")
@@ -62,7 +52,8 @@ def build(project, state, user, serena_home, prompts_dir):
             "mode": "primary",
             "prompt": f"{{file:{prompt}}}",
             "tools": dict(TOOLS),
-            "permission": {"task": {"*": "deny"}, "skill": {"*": "deny"}, "edit": dict(edit), "external_directory": dict(external)},
+            "permission": {"task": {"*": "deny"}, "skill": {"*": "deny"}, "edit": {"*": "deny", ".review-arm/*": "allow"},
+                           "external_directory": {"*": "deny"}},
         }
     cfg = {"$schema": "https://opencode.ai/config.json", "autoupdate": False, "provider": user.get("provider", {})}
     if "enabled_providers" in user:
@@ -81,7 +72,6 @@ def build(project, state, user, serena_home, prompts_dir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("project")
     ap.add_argument("state")
     ap.add_argument("--user-config", default=os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
                                                           "opencode", "opencode.json"))
@@ -95,7 +85,7 @@ def main():
     prompts = os.path.join(xdg, "prompts")
     os.makedirs(os.path.join(xdg, "opencode"), exist_ok=True)
     os.makedirs(prompts, exist_ok=True)
-    cfg = build(a.project, a.state, user, a.serena_home, prompts)
+    cfg = build(user, a.serena_home, prompts)
     json.dump(cfg, open(os.path.join(xdg, "opencode", "opencode.json"), "w", encoding="utf-8"), indent=1)
     print(f"OPENCODE_XDG={xdg}")
 

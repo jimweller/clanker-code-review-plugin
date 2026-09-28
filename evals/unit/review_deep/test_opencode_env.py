@@ -22,14 +22,12 @@ USER_CONFIG = {
 }
 
 
-def generate(tmp_path, state_inside=True):
-    project = tmp_path / "project"
-    project.mkdir()
-    state = project / ".llmtmp" / "review-deep" if state_inside else tmp_path / "state"
+def generate(tmp_path):
+    state = tmp_path / "project" / ".llmtmp" / "review-deep"
     state.mkdir(parents=True)
     user = tmp_path / "user-opencode.json"
     user.write_text(json.dumps(USER_CONFIG))
-    p = subprocess.run([sys.executable, SCRIPT, str(project), str(state), "--user-config", str(user),
+    p = subprocess.run([sys.executable, SCRIPT, str(state), "--user-config", str(user),
                         "--serena-home", str(tmp_path / "serena-home")], capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     xdg = state / "opencode-config"
@@ -87,28 +85,15 @@ def test_agents_get_read_search_serena_and_write_only(tmp_path):
     assert perm["skill"] == {"*": "deny"} and perm["task"] == {"*": "deny"}
 
 
-def test_writes_are_limited_to_parts_and_coverage_relative_to_the_project(tmp_path):
+def test_writes_are_limited_to_the_arms_own_folder_inside_its_copy(tmp_path):
     _, cfg, _, _ = generate(tmp_path)
     perm = cfg["agent"]["reviewer-security"]["permission"]
-    assert list(perm["edit"].items()) == [("*", "deny"), (".llmtmp/review-deep/parts/*", "allow"),
-                                          (".llmtmp/review-deep/coverage/*", "allow")]
+    assert list(perm["edit"].items()) == [("*", "deny"), (".review-arm/*", "allow")]
     assert perm["external_directory"] == {"*": "deny"}
 
 
-def test_state_dir_outside_the_project_gets_relative_edit_and_absolute_external_rules(tmp_path):
-    _, cfg, _, state = generate(tmp_path, state_inside=False)
-    perm = cfg["agent"]["reviewer-security"]["permission"]
-    real = os.path.realpath(state)
-    assert perm["edit"]["../state/parts/*"] == "allow"
-    assert perm["external_directory"][f"{real}/parts/*"] == "allow"
-    assert perm["external_directory"][f"{real}/coverage/*"] == "allow"
-    assert list(perm["external_directory"].items())[0] == ("*", "deny")
-
-
 def test_missing_user_config_fails_loudly(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    p = subprocess.run([sys.executable, SCRIPT, str(project), str(project), "--user-config", str(tmp_path / "nope.json")],
+    p = subprocess.run([sys.executable, SCRIPT, str(tmp_path), "--user-config", str(tmp_path / "nope.json")],
                        capture_output=True, text=True)
     assert p.returncode != 0
     assert "nope.json" in p.stderr
