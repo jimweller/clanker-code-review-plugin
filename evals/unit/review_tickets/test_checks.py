@@ -40,3 +40,12 @@ def test_snapshot_commit_sentence_passes_the_wiki_checks(repo):
     ticket = make_ticket(sentence, "review-diff")
     source = lambda p: lines_at(str(repo["repo"]), run["commit"], p)  # noqa: E731
     assert checks.check(ticket, source, "review-diff") == []
+
+
+def test_monospace_code_and_panel_words_are_not_counted_as_markup(repo):
+    run = json.loads((repo["run"] / "run.json").read_text())
+    ticket = make_ticket(run["commit_sentence"], "review-deep")
+    ticket["description"] = ticket["description"].replace(
+        "the fetch call has no timeout", "the {{code}} field and the {{code}} key and the {{panel}} name have no timeout")
+    source = lambda p: lines_at(str(repo["repo"]), run["commit"], p)  # noqa: E731
+    assert checks.check(ticket, source, "review-deep") == []

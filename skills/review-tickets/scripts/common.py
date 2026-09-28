@@ -13,6 +13,7 @@ PROMPTS = os.path.join(os.path.dirname(HERE), "prompts")
 RANK = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 NON_BUG_AREAS = {"testing", "test", "documentation", "quality", "maintainability", "architecture", "solid"}
 CATEGORY = {"bug": "correctness", "maintainability": "quality", "test": "testing", "documentation": "quality"}
+CATEGORIES = {"correctness", "quality", "testing", "security", "architecture", "data", "ops", "performance", "solid"}
 
 DEFAULT_MODELS = {
     "judge": ["opus", "xhigh"],
@@ -73,3 +74,9 @@ def lower(*severities):
 def prompt(name, **values):
     from string import Template
     return Template(open(os.path.join(PROMPTS, name), encoding="utf-8").read()).substitute(values)
+
+
+def category(area):
+    """The label for an area. A reviewer area is its own label, a scanner category maps through
+    CATEGORY, and anything else, such as ocr's "other", is quality."""
+    return area if area in CATEGORIES else CATEGORY.get(area, "quality")

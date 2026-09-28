@@ -16,12 +16,16 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import load_run, run_dir, ticket_label, tickets_dir  # noqa: E402
+from common import CATEGORIES, load_run, run_dir, ticket_label, tickets_dir  # noqa: E402
 from evidence import lines_at  # noqa: E402
 from wiki import SAFE_AFTER, SAFE_BEFORE  # noqa: E402
 
-CATEGORIES = {"correctness", "quality", "testing", "security", "architecture", "data", "ops", "performance", "solid"}
 CODE = re.compile(r"\{code:[a-z#]+\}\n// (?P<path>[^\s:]+):(?P<start>\d+)-(?P<end>\d+)\n(?P<body>.*?)\n\{code\}", re.S)
+
+
+def markup(d, tag):
+    """Count a {tag} or {tag:...} macro, leaving out the same word inside Jira monospace {{...}}."""
+    return len(re.findall(r"(?<!\{)\{" + tag + r"(?=[:}])(?:[^{}]*)\}(?!\})", d))
 
 
 def check(ticket, source, label="review-deep"):
@@ -31,10 +35,10 @@ def check(ticket, source, label="review-deep"):
         problems.append(f"{i}: no summary")
     elif len(s) > 80:
         problems.append(f"{i}: summary {len(s)} chars")
-    if d.count("{panel:bgColor=#deebff}") != 1 or d.count("{panel}") != 1:
+    if d.count("{panel:bgColor=#deebff}") != 1 or markup(d, "panel") != 2:
         problems.append(f"{i}: panel markup unbalanced")
     blocks = CODE.findall(d)
-    if not blocks or len(blocks) != d.count("{code:") or d.count("{code}") != len(blocks):
+    if not blocks or markup(d, "code") != 2 * len(blocks):
         problems.append(f"{i}: code blocks malformed")
     for m in CODE.finditer(d):
         lines = source(m.group("path"))

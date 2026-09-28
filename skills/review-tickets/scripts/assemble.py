@@ -4,7 +4,8 @@
     python3 assemble.py RUN_DIR
 
 Reads tickets/units.jsonl, edits.json, merges.json, merge_edits.json, and decisions.json. Writes
-tickets/final/<ID>.json, tickets/final/manifest.json, and tickets/postable.json.
+tickets/final/<ID>.json, tickets/final/manifest.json, tickets/postable.json, and tickets.md next to
+report.md, the same tickets as plain markdown behind a count of tickets by perspective and priority.
 
 A ticket's Context is one bullet per kept finding, in the reviewer's words after the judge's edits,
 converted to Jira wiki markup by wiki.to_wiki. Details is the commit sentence and up to MAX_BLOCKS
@@ -17,10 +18,11 @@ units.
 """
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import CATEGORY, RANK, load_json, load_run, read_jsonl, run_dir, ticket_label, tickets_dir  # noqa: E402
+from common import RANK, category, load_json, load_run, read_jsonl, run_dir, ticket_label, tickets_dir  # noqa: E402
 from evidence import lines_at  # noqa: E402
 from wiki import code as wiki_code  # noqa: E402
 from wiki import to_wiki  # noqa: E402
@@ -44,7 +46,7 @@ def windows(n, lines):
     return spans
 
 
-def render(run, tid, issue, typ, areas, priority, summary, source, members, defer, out_dir):
+def render(run, tid, issue, typ, areas, priority, summary, source, members, defer, out_dir, markdown=None):
     source_of = lambda p: lines_at(run["repo"], run["commit"], p)
     context = []
     for m in members:
@@ -71,15 +73,49 @@ def render(run, tid, issue, typ, areas, priority, summary, source, members, defe
         flags.append("no-summary")
     if priority in defer:
         flags.append("deferred")
+    labels = [ticket_label(run)] + sorted({category(a) for a in areas})
+    if markdown is not None:
+        markdown[tid] = md_section(tid, summary, priority, typ, labels, "deferred" in flags, members, sentence, spans, source_of)
     ticket = {"id": tid, "issue": issue, "summary": summary, "summary_source": source, "priority": priority, "type": typ,
-              "labels": [ticket_label(run)] + sorted({CATEGORY.get(a, a) for a in areas}),
+              "labels": labels,
               "locations": [f"{m['path']}:{m['line']}" for m in members], "members": [m["id"] for m in members],
               "description": description, "flags": flags}
     json.dump(ticket, open(f"{out_dir}/{tid}.json", "w"), indent=1)
     return {"id": tid, "summary_source": source, "flags": flags, "members": len(members)}
 
 
-def assemble(run, units, edits, merges, merge_edits, decisions, out_dir):
+def md_section(tid, summary, priority, typ, labels, deferred, members, sentence, spans, source_of):
+    out = [f"## {tid}: {summary or '(no summary)'}", "", f"- Priority: {priority}", f"- Type: {typ}",
+           f"- Labels: {', '.join(labels[1:])}"]
+    if deferred:
+        out.append("- Status: Deferred")
+    out += ["", "### Findings", ""]
+    out += [f"- `{m['path']}:{m['line']}`" + (f" `{m['symbol']}`" if m.get("symbol") else "") + f" {m['text']}" for m in members]
+    out += ["", "### Code", "", re.sub(r"\{\{(.+?)\}\}", r"`\1`", sentence), ""]
+    for p, a, b in spans:
+        body = "\n".join(source_of(p)[a - 1:b])
+        fence = "`" * max(3, 1 + max((len(r) for r in re.findall(r"`+", body)), default=0))
+        out += [f"{fence}{os.path.splitext(p)[1].lstrip('.')}", f"// {p}:{a}-{b}", body, fence, ""]
+    return "\n".join(out).rstrip() + "\n"
+
+
+def tickets_md(run, tickets, markdown):
+    """tickets.md: a perspective by severity count, then every ticket in priority order."""
+    order = sorted(tickets, key=lambda t: (RANK[t["priority"]], t["id"]))
+    deferred = sum(1 for t in tickets if "deferred" in t["flags"])
+    cols = sorted(RANK, key=RANK.get)
+    out = [f"# Tickets for {os.path.basename(run['repo'])} at {run['commit'][:12]}", "",
+           f"{len(tickets)} tickets, {len(tickets) - deferred} postable, {deferred} deferred.", "",
+           "| Perspective | " + " | ".join(cols) + " | Total |", "| -- |" + " --: |" * (len(cols) + 1)]
+    rows = [(p, [t for t in tickets if p in t["labels"][1:]]) for p in sorted({p for t in tickets for p in t["labels"][1:]})]
+    for name, ts in rows + [("Distinct tickets", tickets)]:
+        out.append(f"| {name} | " + " | ".join(str(sum(1 for t in ts if t["priority"] == c)) for c in cols) + f" | {len(ts)} |")
+    out += ["", "A ticket carries one label for every perspective that raised any of its findings, so the perspective rows "
+            "add up to more than the distinct tickets.", ""]
+    return "\n".join(out) + "".join("\n" + markdown[t["id"]] for t in order)
+
+
+def assemble(run, units, edits, merges, merge_edits, decisions, out_dir, markdown=None):
     os.makedirs(out_dir, exist_ok=True)
     for f in os.listdir(out_dir):
         if f.endswith(".json"):
@@ -106,7 +142,7 @@ def assemble(run, units, edits, merges, merge_edits, decisions, out_dir):
             manifest.append({"id": u["id"], "flags": [f"merged-into-{merged_into[u['id']]}"]})
             continue
         manifest.append(render(run, u["id"], u["issue"], u["type"], u["areas"], priority, ed.get("summary"), "editor" if ed else "none",
-                               members, defer, out_dir))
+                               members, defer, out_dir, markdown))
     for gid, g in sorted(merges.items()):
         me = merge_edits.get(gid, {})
         if me and me["status"] != "ready":
@@ -125,7 +161,7 @@ def assemble(run, units, edits, merges, merge_edits, decisions, out_dir):
         priority = max([g["severity"], highest] + ([me["severity"]] if me else []), key=RANK.get)
         u0 = parts[0][0]
         manifest.append(render(run, gid, u0["issue"], u0["type"], sorted({a for u, _, _ in parts for a in u["areas"]}), priority,
-                               me.get("summary", g["summary"]), "merge", members, defer, out_dir))
+                               me.get("summary", g["summary"]), "merge", members, defer, out_dir, markdown))
     json.dump(manifest, open(f"{out_dir}/manifest.json", "w"), indent=1)
     return manifest
 
@@ -135,9 +171,12 @@ def main():
     run = load_run(d)
     t = tickets_dir(d)
     units = read_jsonl(f"{t}/units.jsonl")
+    markdown = {}
     manifest = assemble(run, units, load_json(f"{t}/edits.json", {}), load_json(f"{t}/merges.json", {}),
-                        load_json(f"{t}/merge_edits.json", {}), load_json(f"{t}/decisions.json", {}), f"{t}/final")
+                        load_json(f"{t}/merge_edits.json", {}), load_json(f"{t}/decisions.json", {}), f"{t}/final", markdown)
     tickets = [m for m in manifest if "summary_source" in m]
+    with open(f"{d}/tickets.md", "w", encoding="utf-8") as f:
+        f.write(tickets_md(run, [json.load(open(f"{t}/final/{m['id']}.json")) for m in tickets], markdown))
     postable = sorted(m["id"] for m in tickets if "deferred" not in m["flags"])
     json.dump(postable, open(f"{t}/postable.json", "w"), indent=1)
     print(f"tickets {len(tickets)} ({sum(1 for m in tickets if m['summary_source'] == 'merge')} merged), "

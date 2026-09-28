@@ -102,6 +102,8 @@ python3 $S/assemble.py $RUN
 python3 $S/checks.py $RUN
 ```
 
+`assemble.py` also writes `tickets.md` next to `report.md` in the run directory: the same tickets as plain markdown, opening with a count of tickets by perspective and priority, then every ticket in priority order with its findings and code. Rerunning Step 5 after Step 7 rewrites it.
+
 `checks.py` must print `problems 0` before anything is posted. It compares every code block to git byte for byte, checks every location, and flags markup Jira will not render.
 
 ### Step 6: Screen for duplicates
@@ -180,6 +182,10 @@ Under `$RUN/tickets/`:
 - `edits.json`, `merges.json`, `merge_edits.json`, `decisions.json`
 - `final/<ID>.json`, one posting payload per ticket, `final/manifest.json`, and `postable.json`
 - `dup_pairs.json`, `bundle/`
+
+In the run directory itself, beside `report.md`:
+
+- `tickets.md`, every ticket as plain markdown behind a perspective by priority table
 
 ## Tests
 
