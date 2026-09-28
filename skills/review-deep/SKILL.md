@@ -129,6 +129,10 @@ CONCURRENCY=27
 cat > "$STATE_DIR/arm.sh" <<'ARM'
 #!/bin/bash
 label=$1 model=$2 area=$3 comp=$4
+if [ ! -d "$STATE_DIR/parts" ] || [ ! -d "$TARGET_PATH" ]; then
+  echo "arm.sh: STATE_DIR='$STATE_DIR' TARGET_PATH='$TARGET_PATH'. Export both with the values Step 1 printed." >&2
+  exit 255
+fi
 VARIANT=""
 [ "$label" = claude ] && VARIANT="--variant xhigh"
 base="$label-$area-$comp"
@@ -171,7 +175,12 @@ OUTPUT_PATH: $STATE_DIR/parts/$base.md
 
 Write your findings to OUTPUT_PATH. Writing that file is mandatory and is
 how your work is delivered. Do not return findings as your response."
-mkdir -p "$STATE_DIR/opencode-db"
+raw="$STATE_DIR/parts/raw-$base.ndjson"
+wrote_findings() {
+  [ -s "$STATE_DIR/parts/$base.md" ] ||
+    jq -r 'select(.type=="text") | .part.text' "$raw" 2>/dev/null | grep -q '^## '
+}
+mkdir -p "$STATE_DIR/opencode-db" "$STATE_DIR/parts/attempts"
 attempt=1
 max_attempts=3
 while :; do
@@ -186,14 +195,15 @@ while :; do
     --title "Review $label $area $comp" \
     "$prompt" \
     < /dev/null \
-    > "$STATE_DIR/parts/raw-$base.ndjson" 2> "$STATE_DIR/parts/$base.log"
+    > "$raw" 2> "$STATE_DIR/parts/$base.log"
 
-  grep -q '"Failed to execute statement"' "$STATE_DIR/parts/raw-$base.ndjson" 2>/dev/null || break
+  if wrote_findings && ! grep -q '"Failed to execute statement"' "$raw" 2>/dev/null; then break; fi
   [ "$attempt" -ge "$max_attempts" ] && break
-  mv "$STATE_DIR/parts/raw-$base.ndjson" "$STATE_DIR/parts/raw-$base.attempt$attempt.ndjson"
+  mv "$raw" "$STATE_DIR/parts/attempts/raw-$base.attempt$attempt.ndjson"
   sleep $((5 + RANDOM % 15))
   attempt=$((attempt + 1))
 done
+wrote_findings || { echo "arm.sh: $base wrote no findings in $attempt attempts" >&2; exit 1; }
 ARM
 
 : > "$STATE_DIR/tasks.txt"
@@ -236,14 +246,16 @@ opencode's own session store can die under write pressure at `CONCURRENCY=27`. M
 
 `arm.sh` gives each arm its own database instead of racing on the shared one: `OPENCODE_DB="$STATE_DIR/opencode-db/$base.db"` (confirmed by reading opencode's own source: `OPENCODE_DB` is checked directly and, given an absolute path, used as the SQLite file with no further resolution against the shared data dir). This is the actual fix, not a workaround; a run this size no longer touches `~/.local/share/opencode/opencode.db` at all, and the write-contention failure has nothing left to contend over. `auth.json`, the provider credentials, and the downloaded tool cache under `bin/` are untouched, since only the DB path changes.
 
-The retry loop stays as defense in depth for whatever this doesn't cover: it re-runs the same `opencode run` invocation up to twice more on a `grep` match for `"Failed to execute statement"` in the arm's NDJSON, with 5-19 seconds of jittered sleep between attempts so retries don't restack into the same contention window. A superseded attempt's NDJSON is kept as `raw-$base.attemptN.ndjson`, never deleted. An arm that still carries this error after 3 attempts surfaces as an ordinary `MISSING` entry in Step 3, re-dispatchable the normal way.
+The retry loop re-runs the same `opencode run` invocation up to twice more in two cases. The first is a `grep` match for `"Failed to execute statement"` in the arm's NDJSON, kept as defense in depth for whatever the per-arm database leaves uncovered. The second is an arm that ends with no findings, meaning `OUTPUT_PATH` is empty and no text event carries a `## ` heading. Measured on a 718-file repo, 20 of 351 gemini arms read files, made no write call, and ended on a `stop` step with 0 output tokens. None of the 331 gemini arms that wrote findings ended that way. Attempts are separated by 5 to 19 seconds of jittered sleep so retries don't restack into the same contention window. A superseded attempt's NDJSON moves to `parts/attempts/raw-$base.attemptN.ndjson` and is never deleted. That directory sits outside the `parts/raw-*.ndjson` glob Step 3 extracts from. An arm with no findings after 3 attempts exits 1 with its name on stderr and surfaces as an ordinary `MISSING` entry in Step 3.
+
+`arm.sh` exits 255 when `STATE_DIR` or `TARGET_PATH` is unset or names a missing directory. `xargs` stops launching arms after an exit of 255, so a batch dispatched from a shell that never exported them fails on its first arms instead of reporting success. Shell variables do not carry between Bash calls, so every call that runs `arm.sh` exports both. One retry batch ran all 20 of its arms with an empty `STATE_DIR`. Each arm failed on `mkdir: /opencode-db: Read-only file system`, and the batch still exited 0.
 
 ### Step 2b: Confirm Arms Start
 
 Run this as a separate foreground call while Step 2 is still waiting. An arm that never created a session wrote nothing and never will, and it holds a pool slot.
 
 ```bash
-find "$STATE_DIR/parts" -name 'raw-*.ndjson' -size 0 -mmin +1 | sed 's|.*/raw-||; s|\.ndjson$||; s/^/NO SESSION /'
+find "$STATE_DIR/parts" -maxdepth 1 -name 'raw-*.ndjson' -size 0 -mmin +1 | sed 's|.*/raw-||; s|\.ndjson$||; s/^/NO SESSION /'
 ```
 
 A healthy arm writes NDJSON within seconds of launch. Kill any arm named here. Step 3 re-dispatches it.
@@ -263,19 +275,22 @@ A stale log with no growing output for several minutes is not proof of a hang; t
 
 ### Step 3: Collect and Verify
 
-An arm sometimes returns its findings as its response instead of writing OUTPUT_PATH. `gpt-6-sol` does this. The findings are in the NDJSON, so copy them out first. Then merge each area and model's parts into one file.
+An arm sometimes returns its findings as its response instead of writing OUTPUT_PATH. `gpt-6-sol` does this. The findings are in the NDJSON, so copy them out first. An arm with nothing to copy is left with no part file, so a `MISSING` check and a file count agree. Then merge each area and model's parts into one file.
+
+The merge rebuilds each merged file from scratch out of the component parts and, once Step 4 has run, that area's sweep part. Running it again at any point gives the same result, so a re-dispatch after the sweep keeps the sweep's findings.
 
 ```bash
 for f in "$STATE_DIR"/parts/raw-*.ndjson; do
   b=$(basename "$f" .ndjson); out="$STATE_DIR/parts/${b#raw-}.md"
   [ -s "$out" ] && continue
   jq -r 'select(.type=="text") | .part.text' "$f" | awk '/^## /{p=1} p' > "$out"
+  [ -s "$out" ] || rm -f "$out"
 done
 
 for label in openai gemini claude; do
   for area in security architecture solid correctness testing ops performance quality data; do
     out="$STATE_DIR/$label-$area.md"
-    parts=$(ls "$STATE_DIR"/parts/"$label-$area"-c*.md 2>/dev/null)
+    parts=$(ls "$STATE_DIR"/parts/"$label-$area"-c*.md "$STATE_DIR"/parts/"$label-$area"-sweep.md 2>/dev/null)
     [ -z "$parts" ] && continue
     { grep -h -m1 '^## ' $parts | head -1; echo; grep -h '^- \*\*' $parts; } > "$out"
     grep -q '^- \*\*' "$out" || echo "No findings." >> "$out"
@@ -329,7 +344,12 @@ fi
 
 A `SHORT` line is an arm that marked some of its component `skipped` or wrote no coverage record. Read its reasons in the coverage record. A skip because the file belongs to another area is fine. A skip for lack of depth is a gap.
 
-Re-dispatch a `MISSING` arm with `bash "$STATE_DIR/arm.sh" <label> <model> <area> <comp>`, then rerun the merge.
+Re-dispatch a `MISSING` arm from a shell that exports the values Step 1 printed, then rerun the extract-and-merge block above. `arm.sh` already retried the arm twice, so re-dispatch it once.
+
+```bash
+export PROJECT_ROOT=<PROJECT_ROOT> TARGET_PATH=<TARGET_PATH> STATE_DIR=<STATE_DIR>
+bash "$STATE_DIR/arm.sh" <label> <model> <area> <comp>
+```
 
 Treat an area as unreviewed when its merged file is missing, or has neither a finding line nor exactly `No findings.` Never record either as `No findings.` Report every arm still missing after one retry to the operator as not reviewed, naming the model, area, and component.
 
@@ -347,21 +367,20 @@ for entry in $MODELS; do
   done
 done
 xargs -P "$CONCURRENCY" -L 1 bash "$STATE_DIR/arm.sh" < "$STATE_DIR/sweeps.txt"
-
-for f in "$STATE_DIR"/parts/raw-*-sweep.ndjson; do
-  b=$(basename "$f" .ndjson); out="$STATE_DIR/parts/${b#raw-}.md"
-  [ -s "$out" ] || jq -r 'select(.type=="text") | .part.text' "$f" | awk '/^## /{p=1} p' > "$out"
-  merged="$STATE_DIR/${b#raw-}"; merged="${merged%-sweep}.md"
-  n=$(grep -c '^- \*\*' "$out")
-  if [ "$n" -gt 0 ]; then
-    sed -i.bak '/^No findings\.$/d' "$merged" && rm -f "$merged.bak"
-    grep -h '^- \*\*' "$out" >> "$merged"
-  fi
-  echo "$(basename "$merged" .md) sweep added=$n"
-done
 ```
 
-Re-export `STATE_DIR`, `TARGET_PATH`, and `PROJECT_ROOT`, and reset `AREAS`, `MODELS`, and `CONCURRENCY`, when this runs as a separate call from Step 2.
+Then rerun the Step 3 extract-and-merge block. It extracts each sweep's findings and rebuilds that area's merged file with them. Check each sweep afterward.
+
+```bash
+while read -r label model area comp; do
+  s="$STATE_DIR/parts/$label-$area-sweep.md"
+  if [ -s "$s" ]; then echo "$label-$area sweep added=$(grep -c '^- \*\*' "$s")"; else echo "MISSING $label $area sweep"; fi
+done < "$STATE_DIR/sweeps.txt"
+```
+
+Re-dispatch a `MISSING` sweep the same way as a `MISSING` arm in Step 3.
+
+Re-export `STATE_DIR`, `TARGET_PATH`, and `PROJECT_ROOT`, and reset `AREAS`, `MODELS`, and `CONCURRENCY`, when a block runs as a separate call from Step 2.
 
 ### Step 5: Collate, Verify, and Report
 
@@ -409,7 +428,7 @@ Report the counts from `report.md`, the confirmed Critical issues, and the cover
 - `coverage/<label>-<area>-<comp>.txt`, each arm's reviewed or skipped record
 - `reviewed.txt` and `opened.txt`, the files arms marked reviewed and the files they opened
 - `parts/<label>-<area>-<comp>.md`, `parts/raw-*.ndjson`, `parts/*.log`, each arm's findings, event stream, and stderr
-- `parts/raw-*.attemptN.ndjson`, a superseded attempt's event stream, kept when arm.sh retries past a SQLite write-contention failure
+- `parts/attempts/raw-*.attemptN.ndjson`, a superseded attempt's event stream, kept when arm.sh retries past a SQLite write-contention failure or an arm that wrote no findings
 - `opencode-db/<label>-<area>-<comp>.db`, each arm's isolated opencode session database
 - `arm.sh`, `tasks.txt`, `sweeps.txt`, the runner and its work lists
 
@@ -469,7 +488,8 @@ Run the unit tests and the replay after any change to `scripts/`. The replay sto
 - ALWAYS redirect stdin from `/dev/null` on `opencode run`. Omitting it hangs the process before session creation with no output and no error, which is anomalyco/opencode issue #38723.
 - Impose no token cap and no turn cap on a reviewer. Let it finish.
 - Run Step 2b a minute or so after dispatch, and again during long runs. An arm with an empty NDJSON is dead and holds a pool slot, and wall time cannot tell that apart from a slow review.
-- Run the Step 2 and Step 4 blocks as background Bash calls. The pool blocks until every arm exits, and backgrounding keeps that out of the main session.
+- Run the Step 2 and Step 4 dispatch blocks as background Bash calls. The pool blocks until every arm exits, and backgrounding keeps that out of the main session.
+- ALWAYS export `STATE_DIR`, `TARGET_PATH`, and `PROJECT_ROOT` in every Bash call that runs `arm.sh`, including a single re-dispatch. Shell variables do not carry between calls, and `arm.sh` exits 255 without them.
 - Launch every arm through the pool and the ocr scan in one bash block. They are independent processes.
 - Use plain message invocation, not `--command`. The `--command` flag has a known issue with the context7 MCP server.
 - Do NOT clean up per-area files, NDJSON, or logs during a run. Step 1 wipes them at the start of the next one.
