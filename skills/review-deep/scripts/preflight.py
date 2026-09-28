@@ -18,9 +18,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_ROOT = os.path.dirname(HERE)
+PLUGIN_ROOT = os.path.dirname(os.path.dirname(SKILL_ROOT))
 AREAS = ["architecture", "correctness", "data", "ops", "performance", "quality", "security", "solid", "testing"]
 CORE_SCRIPTS = ["common.py", "init_run.py", "checkout.py", "normalize.py", "collate.py", "windows.py", "merge.py",
-                "rank.py", "verify.py", "report.py", "ledger.py", "partition.py", "check_reviews.py", "evidence.py", "pool.py"]
+                "rank.py", "verify.py", "report.py", "ledger.py", "partition.py", "check_reviews.py", "evidence.py", "pool.py",
+                "opencode_env.py"]
 ENV_REF = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -121,45 +123,19 @@ def check_opencode_json():
         results.append(check(f"{prov} provider api key env var set",
                              bool(var) and bool(os.environ.get(var)),
                              "no apiKey env reference" if not var else (f"{var} not set" if not os.environ.get(var) else var)))
-    mcp = data.get("mcp", {})
-    results.append(check("serena mcp enabled in opencode.json", mcp.get("serena", {}).get("enabled") is True))
-    results.append(check("researcher mcp disabled in opencode.json", mcp.get("researcher", {}).get("enabled") is False))
     return results
 
 
-def check_reviewer_json():
-    path = os.path.expanduser("~/.config/opencode/reviewer.json")
-    data, err = read_json(path)
-    if data is None:
-        return [check("reviewer.json readable", False, err)]
-    results = [check("reviewer.json has instructions", bool(data.get("instructions")))]
-    serena = data.get("mcp", {}).get("serena", {})
-    results.append(check("reviewer.json serena mcp has context", bool(serena.get("command"))))
-    results.append(check("reviewer.json serena mcp has SERENA_HOME", bool(serena.get("environment", {}).get("SERENA_HOME"))))
-    return results
+def check_serena_home():
+    path = os.path.expanduser("~/.serena-reviewer/serena_config.yml")
+    return check("~/.serena-reviewer/serena_config.yml present", os.path.exists(path), "" if os.path.exists(path) else f"{path} not found")
 
 
-def check_serena_reviewer_files():
-    home = os.path.expanduser("~/.serena-reviewer")
-    required = ["serena_config.yml", "reviewer-context.yml", "system-prompt.md"]
-    missing = [f for f in required if not os.path.exists(os.path.join(home, f))]
-    return check("~/.serena-reviewer files present", not missing, f"missing {missing}" if missing else "")
-
-
-def check_opencode_reviewer_agents():
-    missing = [a for a in AREAS if not os.path.exists(os.path.expanduser(f"~/.config/opencode/agents/reviewer-{a}.md"))]
-    bad_mode = []
-    for a in AREAS:
-        p = os.path.expanduser(f"~/.config/opencode/agents/reviewer-{a}.md")
-        if os.path.exists(p) and "mode: primary" not in open(p, encoding="utf-8").read():
-            bad_mode.append(a)
-    problems = []
-    if missing:
-        problems.append(f"missing {missing}")
-    if bad_mode:
-        problems.append(f"not mode: primary: {bad_mode}")
-    return check("nine ~/.config/opencode/agents/reviewer-<area>.md exist with mode: primary", not problems,
-                 "; ".join(problems))
+def check_arm_agent_sources():
+    missing = [f"agents/reviewer-{a}.md" for a in AREAS if not os.path.exists(os.path.join(PLUGIN_ROOT, "agents", f"reviewer-{a}.md"))]
+    missing += [f"opencode/serena/{f}" for f in ("reviewer-context.yml", "system-prompt.md")
+                if not os.path.exists(os.path.join(SKILL_ROOT, "opencode", "serena", f))]
+    return check("plugin reviewer agents and serena reviewer files present", not missing, f"missing {missing}" if missing else "")
 
 
 def check_opencodereview_config():
@@ -194,9 +170,8 @@ def deep_tier_checks():
     for name in ("jq", "ocr", "opencode", "serena"):
         results.append(check_binary(name))
     results += check_opencode_json()
-    results += check_reviewer_json()
-    results.append(check_serena_reviewer_files())
-    results.append(check_opencode_reviewer_agents())
+    results.append(check_serena_home())
+    results.append(check_arm_agent_sources())
     results.append(check_opencodereview_config())
     results.append(check_opencode_models_lists(parse_models_line()))
     return results

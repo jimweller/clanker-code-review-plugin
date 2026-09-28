@@ -106,3 +106,23 @@ def test_full_tier_prints_empty_agent_prefix_for_codex_harness(home, stub_bin, t
     lines = p.stdout.splitlines()
     assert "LABEL=codex" in lines
     assert "AGENT_PREFIX=" in lines
+
+
+def test_deep_tier_needs_no_per_user_reviewer_agents_or_reviewer_json(home, stub_bin, tmp_path):
+    cfg = os.path.join(home, ".config", "opencode")
+    shutil.rmtree(os.path.join(cfg, "agents"))
+    os.remove(os.path.join(cfg, "reviewer.json"))
+    data = json.load(open(os.path.join(cfg, "opencode.json")))
+    data.pop("mcp")
+    json.dump(data, open(os.path.join(cfg, "opencode.json"), "w"))
+    for f in ("reviewer-context.yml", "system-prompt.md"):
+        os.remove(os.path.join(home, ".serena-reviewer", f))
+    p = run_preflight("deep", home, stub_bin, tmp_path)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_deep_tier_fails_without_the_serena_reviewer_home(home, stub_bin, tmp_path):
+    shutil.rmtree(os.path.join(home, ".serena-reviewer"))
+    p = run_preflight("deep", home, stub_bin, tmp_path)
+    assert p.returncode == 1
+    assert any("serena-reviewer" in line and line.startswith("FAIL") for line in p.stdout.splitlines()), p.stdout

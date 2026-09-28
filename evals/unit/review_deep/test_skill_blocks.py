@@ -16,6 +16,8 @@ pytestmark = pytest.mark.skipif(not (shutil.which("bash") and shutil.which("jq")
 STUB_OPENCODE = r'''#!/bin/bash
 n=$(( $(cat "$STUB_DIR/calls" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$STUB_DIR/calls"
+env | grep -E '^(XDG_CONFIG_HOME|OPENCODE_[A-Z_]+)=' | sort > "$STUB_DIR/env"
+printf '%s\n' "$@" > "$STUB_DIR/args"
 out=$(printf '%s\n' "${@: -1}" | sed -n 's/^OUTPUT_PATH: //p')
 case "$(sed -n "${n}p" "$STUB_DIR/plan")" in
   file) printf '## Security\n\n- **High** `a.ts:1` `f` Bad.\n' > "$out"
@@ -76,7 +78,7 @@ def arm(tmp_path):
         calls = int((stub / "calls").read_text()) if (stub / "calls").exists() else 0
         return p, calls
 
-    return types.SimpleNamespace(run=run, state=state)
+    return types.SimpleNamespace(run=run, state=state, stub=stub)
 
 
 @pytest.fixture
@@ -99,6 +101,19 @@ def test_arm_stops_the_batch_when_state_dir_is_not_exported(arm):
 def test_arm_that_writes_its_file_runs_once(arm):
     p, calls = arm.run(["file"])
     assert (p.returncode, calls) == (0, 1)
+
+
+def test_arm_runs_opencode_isolated_under_the_generated_config(arm):
+    arm.run(["file"])
+    env = dict(line.split("=", 1) for line in (arm.stub / "env").read_text().splitlines())
+    assert env["XDG_CONFIG_HOME"] == str(arm.state / "opencode-config")
+    for flag in ("OPENCODE_PURE", "OPENCODE_DISABLE_EXTERNAL_SKILLS", "OPENCODE_DISABLE_CLAUDE_CODE",
+                 "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_AUTOUPDATE"):
+        assert env.get(flag) == "1", flag
+    assert "OPENCODE_CONFIG" not in env, "the operator's reviewer.json layer is gone"
+    assert env["OPENCODE_DB"] == str(arm.state / "opencode-db" / "gemini-security-c01.db")
+    args = (arm.stub / "args").read_text().splitlines()
+    assert args[args.index("--agent") + 1] == "reviewer-security"
 
 
 def test_arm_that_returns_findings_as_text_runs_once(arm):

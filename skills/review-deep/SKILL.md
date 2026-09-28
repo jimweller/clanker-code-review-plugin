@@ -51,11 +51,11 @@ An earlier version of this file banned wrapping `opencode run` in `timeout` and 
 
 Impose no token cap and no turn cap on a reviewer. A review of a large repo takes as long as it takes.
 
-Serena must be enabled in `~/.config/opencode/opencode.json` and started with `--project-from-cwd`. It is the only navigation the reviewers have. `--dir` points at the target so Serena's walk finds the project.
+Serena is the only MCP server the arms get. Step 1's `opencode_env.py` starts it with `--project-from-cwd`, and `--dir` points at the target so Serena's walk finds the project. Serena reads its settings from `SERENA_HOME`, `~/.serena-reviewer` by default, which holds its `serena_config.yml` and downloaded language servers.
 
 ### Why researcher is disabled
 
-`~/.config/opencode/opencode.json` sets `"enabled": false` on the `researcher` MCP server, and the reviewer agents disable its tools again. Google rejects its schemas.
+The arms never load the operator's MCP servers, so `researcher` cannot reach them. It is worth knowing why it once broke them: Google rejects its schemas.
 
 `researcher` declares optional arrays as the union type `["null","array"]`, which is valid JSON Schema. Anthropic and OpenAI accept it. Google converts JSON Schema into its own OpenAPI-subset proto, turns the union into `any_of`, drops `items` from the array branch, then rejects its own output with `any_of[0].items: missing field`. The gemini arm fails in 5 seconds with one `error` event and 5712 bytes of NDJSON.
 
@@ -96,6 +96,7 @@ jq -r '.files[] | select(.will_review) | .path' "$STATE_DIR/ocr-preview.json" > 
 jq -r '.files[] | select(.will_review | not) | "\(.path)\t\(.exclude_reason)"' "$STATE_DIR/ocr-preview.json" > "$STATE_DIR/skipped.txt"
 
 python3 "$S/partition.py" "$STATE_DIR"
+python3 "$S/opencode_env.py" "$PROJECT_ROOT" "$STATE_DIR" || exit 1
 
 echo "PROJECT_ROOT=$PROJECT_ROOT"
 echo "TARGET_PATH=$TARGET_PATH"
@@ -113,6 +114,8 @@ python3 "$S/init_run.py" "$PROJECT_ROOT" "$TARGET_PATH" "$STATE_DIR"
 `ocr scan --preview` lists every file without calling a model. `ledger.txt` holds the reviewable ones. `skipped.txt` holds the rest with ocr's reason, such as `binary` or `unsupported_ext`, and Step 5 reports it as the skipped ledger.
 
 `partition.py` cuts the ledger into components of at most 25 files along directory lines, the size Anthropic's Claude Security scanner uses. A reviewer given the whole repo stops after 40 to 50 files by its own choice. Given a component, it reviews every file. A 41-file repo yields 1 component and a 414-file repo yields 22.
+
+`opencode_env.py` writes the only opencode config the arms read, `$STATE_DIR/opencode-config/opencode/opencode.json`. It copies `provider` and `enabled_providers` from `~/.config/opencode/opencode.json` and adds Serena as the one MCP server, with this plugin's reviewer context and manual under `opencode/serena/`. It also adds nine primary agents whose prompts are the bodies of the plugin's `agents/reviewer-<area>.md`, the same text review-full and review-diff give their Claude reviewers. Each agent may read, search, use Serena's read tools, and write only under `$STATE_DIR/parts` and `$STATE_DIR/coverage`. No skill, subagent, shell, or web tool.
 
 `find -delete` rather than `rm -f`. A `safe-rm` shim on `PATH` moves paths to Trash and exits non-zero on a missing path even under `-f`, which breaks the wipe on a first run.
 
@@ -184,8 +187,12 @@ mkdir -p "$STATE_DIR/opencode-db" "$STATE_DIR/parts/attempts"
 attempt=1
 max_attempts=3
 while :; do
-  OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1 \
-  OPENCODE_CONFIG="$HOME/.config/opencode/reviewer.json" \
+  XDG_CONFIG_HOME="$STATE_DIR/opencode-config" \
+  OPENCODE_PURE=1 \
+  OPENCODE_DISABLE_EXTERNAL_SKILLS=1 \
+  OPENCODE_DISABLE_CLAUDE_CODE=1 \
+  OPENCODE_DISABLE_PROJECT_CONFIG=1 \
+  OPENCODE_DISABLE_AUTOUPDATE=1 \
   OPENCODE_DB="$STATE_DIR/opencode-db/$base.db" \
   opencode run \
     --agent "reviewer-$area" \
@@ -232,9 +239,9 @@ echo "done, $(ls "$STATE_DIR"/parts/*.md 2>/dev/null | wc -l | tr -d ' ') part f
 
 `CONCURRENCY=27` holds 27 `opencode` processes at once, which a 48 GB machine carried without trouble. Each held 370 to 800 MB.
 
-Reviewers run as an appliance. `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1` keeps the operator's global `~/.claude/CLAUDE.md` out of their prompt, which removes about 24,000 tokens per turn. `reviewer.json` layers Serena's manual on top of the global opencode config through `instructions`. A repo's own `CLAUDE.md` still loads.
+Reviewers run as an appliance. `XDG_CONFIG_HOME` points opencode at the config Step 1 generated, so none of the operator's opencode agents, skills, rules, plugins, or MCP servers load. Credentials still resolve, because opencode keeps `auth.json` under `XDG_DATA_HOME` and providers read keys from environment variables. `OPENCODE_PURE=1` skips external plugins, `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` skips the skill scans under `~/.claude` and `~/.agents`, `OPENCODE_DISABLE_CLAUDE_CODE=1` skips `~/.claude/CLAUDE.md` and `.claude/skills`, and `OPENCODE_DISABLE_PROJECT_CONFIG=1` skips the reviewed repo's `opencode.json`, `.opencode/`, and `AGENTS.md`. Each was measured against opencode 1.18.20 with `opencode debug config`, `opencode debug skill`, and a planted instruction the model was asked to find.
 
-A reviewer writes its own file with `apply_patch`. The reviewer agents grant it and deny `bash`, `webfetch`, `context7_*`, `repomix_*`, `researcher_*`, and Serena's four write families. They run as `mode: primary`, because opencode ignores a subagent's `tools` block when the agent is selected with `--agent`.
+A reviewer writes its own file with `write`, or `apply_patch` on an OpenAI model. The generated agents deny every tool and then allow `read`, `grep`, `glob`, the write tools, and Serena minus its four write families. An `edit` rule limits writes to `$STATE_DIR/parts` and `$STATE_DIR/coverage`. They run as `mode: primary`, because opencode ignores a subagent's `tools` block when the agent is selected with `--agent`.
 
 A reviewer must not call `task`. Two of 27 reviewers on a 1070-file repo spawned a subagent that never returned, and `TaskTool` runs a foreground subagent with a blocking `yield`, so the parent hung and Step 2's `wait` hung with it. The agents set `tools.task: false` and `permission.task: {"*": deny}`. After the fix both reviewers completed with zero `task` calls.
 
@@ -430,6 +437,7 @@ Report the counts from `report.md`, the confirmed Critical issues, and the cover
 - `parts/<label>-<area>-<comp>.md`, `parts/raw-*.ndjson`, `parts/*.log`, each arm's findings, event stream, and stderr
 - `parts/attempts/raw-*.attemptN.ndjson`, a superseded attempt's event stream, kept when arm.sh retries past a SQLite write-contention failure or an arm that wrote no findings
 - `opencode-db/<label>-<area>-<comp>.db`, each arm's isolated opencode session database
+- `opencode-config/`, the generated opencode config every arm runs under, and its per-area prompt files
 - `arm.sh`, `tasks.txt`, `sweeps.txt`, the runner and its work lists
 
 The run directory, `${XDG_CACHE_HOME:-~/.cache}/review-deep/<repo>-<commit12>/`, holds Step 5's output and survives the next review of a different commit:
@@ -494,4 +502,4 @@ Run the unit tests and the replay after any change to `scripts/`. The replay sto
 - Use plain message invocation, not `--command`. The `--command` flag has a known issue with the context7 MCP server.
 - Do NOT clean up per-area files, NDJSON, or logs during a run. Step 1 wipes them at the start of the next one.
 - If an arm fails, still wait for and report the others.
-- Reviewer agents for the opencode harness must be installed at `~/.config/opencode/agents/reviewer-<area>.md` with `mode: primary`, and the opencode config, reviewer.json, and serena-reviewer files this skill needs must be in place too. How they get there is up to your OpenCode setup; `preflight.py --tier deep` checks all of it by name before Step 1 wipes anything.
+- The opencode arms need only the operator's providers in `~/.config/opencode/opencode.json` and a Serena home at `~/.serena-reviewer`. Their agents, Serena context, and Serena manual come from this plugin through `opencode_env.py`. `preflight.py --tier deep` checks the providers and the Serena home by name before Step 1 wipes anything.
