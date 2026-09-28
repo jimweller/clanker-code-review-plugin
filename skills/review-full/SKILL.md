@@ -124,7 +124,7 @@ Prints one `PASS` or `FAIL` line per area and exits 1 when any fails: the file i
 
 ## Step 7: Run the Scripted Chain
 
-Run the same chain review-deep's Step 5 does, over this run's `RUN_DIR`. Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
+Run the same chain review-deep's Step 5 does, over this run's `RUN_DIR`. Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`. Run the stage command itself as the background call. Never detach it with `nohup` or a trailing `&`, and never wait on a log line with `tail -f | grep -m1`. `tail` exits only when it next writes, so the call hangs until its timeout once the log gets its last line.
 
 ```bash
 python3 "$S/checkout.py" "$RUN_DIR"

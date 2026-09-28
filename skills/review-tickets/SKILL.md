@@ -29,7 +29,7 @@ The run directory printed by review-deep, review-full, or review-diff. Every com
 
 ## Procedure
 
-Run each model step as a background Bash call. The pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running step with `sleep`.
+Run each model step as a background Bash call. The pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running step with `sleep`. Run the step command itself as the background call. Never detach it with `nohup` or a trailing `&`, and never wait on a log line with `tail -f | grep -m1`. `tail` exits only when it next writes, so the call hangs until its timeout once the log gets its last line.
 
 ### Step 1: Preflight and Plan
 

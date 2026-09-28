@@ -130,6 +130,8 @@ echo "LEDGER=$(wc -l < "$STATE_DIR/ledger.txt" | tr -d ' ') reviewable, $(wc -l 
 
 Each of the 27 area and model pairs reviews every component, so a run has 27 arms per component. A worker pool runs them `CONCURRENCY` at a time, beside one ocr scan. Substitute the values Step 1 printed.
 
+Run this block as one background Bash call, as written. The call stays open until the pool and the ocr scan exit, and its completion notification is the signal that Step 2 has finished. Never launch the block with `nohup`, a trailing `&`, or a wrapper script started in the background, because the call then returns at once and no notification ever comes. Never watch a log for the `done,` line. On a quartermaster run the agent detached the block and waited with `tail -f | grep -m1 '^done,'`. `grep` exited on the match, but `tail` exits only when it next writes, and `done,` is the last line the log gets. The call sat idle until its 60-minute `timeout` killed `tail`.
+
 ```bash
 export PROJECT_ROOT TARGET_PATH STATE_DIR EXPORT
 AREAS="security architecture solid correctness testing ops performance quality data"
@@ -403,6 +405,8 @@ done
 xargs -P "$CONCURRENCY" -L 1 bash "$STATE_DIR/arm.sh" < "$STATE_DIR/sweeps.txt"
 ```
 
+Run this block as one background Bash call, the same way as Step 2. Its completion notification is the signal to continue.
+
 Then rerun the Step 3 extract-and-merge block. It extracts each sweep's findings and rebuilds that area's merged file with them. Check each sweep afterward.
 
 ```bash
@@ -424,7 +428,7 @@ rm -rf "$EXPORT"
 
 ### Step 5: Collate, Verify, and Report
 
-Run the scripted stages. Run each model stage as a background Bash call. Its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
+Run the scripted stages. Run each model stage as a background Bash call. Its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`. Run the stage command itself as the background call. Never detach it with `nohup` or a trailing `&`, and never wait on a log line with `tail -f | grep -m1`, for the reasons Step 2 gives.
 
 ```bash
 S="${CLAUDE_SKILL_DIR}/scripts"   # replace ${CLAUDE_SKILL_DIR} with this SKILL.md's own directory on a non-Claude harness
@@ -525,12 +529,12 @@ Run the unit tests and the replay after any change to `scripts/`. The replay sto
 
 - The invoking agent is a launcher. It performs no review analysis of its own. The Step 5 scripts and their model calls do all of it.
 - NEVER let a Step 5 model call read the live working tree. They run in the run directory's `checkout/`.
-- NEVER poll a background stage with `sleep` or a wait loop. Wait for its completion notification.
+- NEVER poll a background stage with `sleep`, a wait loop, or a log watcher such as `tail -f | grep -m1`. Wait for its completion notification.
 - Keep prompts in `prompts/` as `.txt`. A markdown formatter rewrote a `.md` prompt and changed its meaning.
 - ALWAYS redirect stdin from `/dev/null` on `opencode run`. Omitting it hangs the process before session creation with no output and no error, which is anomalyco/opencode issue #38723.
 - Impose no token cap and no turn cap on a reviewer. Let it finish.
 - Run Step 2b a minute or so after dispatch, and again during long runs. An arm with an empty NDJSON is dead and holds a pool slot, and wall time cannot tell that apart from a slow review.
-- Run the Step 2 and Step 4 dispatch blocks as background Bash calls. The pool blocks until every arm exits, and backgrounding keeps that out of the main session.
+- Run the Step 2 and Step 4 dispatch blocks as background Bash calls, never detached with `nohup` or `&`. The pool blocks until every arm exits, and backgrounding keeps that out of the main session. The call's completion notification is the only signal that the pool has finished.
 - ALWAYS export `STATE_DIR`, `TARGET_PATH`, and `PROJECT_ROOT` in every Bash call that runs `arm.sh`, including a single re-dispatch. Shell variables do not carry between calls, and `arm.sh` exits 255 without them.
 - Launch every arm through the pool and the ocr scan in one bash block. They are independent processes.
 - Use plain message invocation, not `--command`. The `--command` flag has a known issue with the context7 MCP server.

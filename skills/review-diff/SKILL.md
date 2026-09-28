@@ -173,7 +173,7 @@ Editing an agent definition does not affect a session already running. Claude Co
 
 ## Step 9: Run the Scripted Chain and Report
 
-Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`.
+Run each model stage as a background Bash call; its pool returns when every call has finished, and the completion notification is the signal to continue. Never poll a running stage with `sleep`. Run the stage command itself as the background call. Never detach it with `nohup` or a trailing `&`, and never wait on a log line with `tail -f | grep -m1`. `tail` exits only when it next writes, so the call hangs until its timeout once the log gets its last line.
 
 ```bash
 python3 "$S/checkout.py" "$RUN_DIR"
